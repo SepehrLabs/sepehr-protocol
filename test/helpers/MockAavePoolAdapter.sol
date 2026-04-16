@@ -1,0 +1,170 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.28;
+
+import {IAavePool} from "../../src/interfaces/external/IAavePool.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+/// @notice Mock Aave Pool that implements getUserAccountData, repay, and withdraw
+///         for unit-testing AaveV3Adapter and AaveV4Adapter.
+contract MockAavePoolAdapter is IAavePool {
+    struct AccountData {
+        uint256 totalCollateralBase;
+        uint256 totalDebtBase;
+        uint256 availableBorrowsBase;
+        uint256 currentLiquidationThreshold;
+        uint256 ltv;
+        uint256 healthFactor;
+    }
+
+    struct RepayCall {
+        address asset;
+        uint256 amount;
+        uint256 interestRateMode;
+        address onBehalfOf;
+    }
+
+    struct WithdrawCall {
+        address asset;
+        uint256 amount;
+        address to;
+    }
+
+    IERC20 public immutable UNDERLYING;
+
+    mapping(address => AccountData) private _accountData;
+
+    RepayCall[] public repayCalls;
+    WithdrawCall[] public withdrawCalls;
+
+    constructor(
+        address underlying
+    ) {
+        UNDERLYING = IERC20(underlying);
+    }
+
+    // ── Setters ────────────────────────────────────────────────────────
+
+    function setUserAccountData(
+        address user,
+        uint256 totalCollateralBase,
+        uint256 totalDebtBase,
+        uint256 availableBorrowsBase,
+        uint256 currentLiquidationThreshold,
+        uint256 ltv,
+        uint256 healthFactor
+    ) external {
+        _accountData[user] = AccountData({
+            totalCollateralBase: totalCollateralBase,
+            totalDebtBase: totalDebtBase,
+            availableBorrowsBase: availableBorrowsBase,
+            currentLiquidationThreshold: currentLiquidationThreshold,
+            ltv: ltv,
+            healthFactor: healthFactor
+        });
+    }
+
+    // ── Getters for recorded calls ─────────────────────────────────────
+
+    function repayCallCount() external view returns (uint256) {
+        return repayCalls.length;
+    }
+
+    function withdrawCallCount() external view returns (uint256) {
+        return withdrawCalls.length;
+    }
+
+    // ── IAavePool implementation ───────────────────────────────────────
+
+    function getUserAccountData(
+        address user
+    )
+        external
+        view
+        override
+        returns (
+            uint256 totalCollateralBase,
+            uint256 totalDebtBase,
+            uint256 availableBorrowsBase,
+            uint256 currentLiquidationThreshold,
+            uint256 ltv,
+            uint256 healthFactor
+        )
+    {
+        AccountData memory d = _accountData[user];
+        return (
+            d.totalCollateralBase,
+            d.totalDebtBase,
+            d.availableBorrowsBase,
+            d.currentLiquidationThreshold,
+            d.ltv,
+            d.healthFactor
+        );
+    }
+
+    function repay(
+        address asset,
+        uint256 amount,
+        uint256 interestRateMode,
+        address onBehalfOf
+    ) external override returns (uint256) {
+        repayCalls.push(
+            RepayCall({asset: asset, amount: amount, interestRateMode: interestRateMode, onBehalfOf: onBehalfOf})
+        );
+        IERC20(asset).transferFrom(msg.sender, address(this), amount);
+        return amount;
+    }
+
+    function withdraw(
+        address asset,
+        uint256 amount,
+        address to
+    ) external override returns (uint256) {
+        withdrawCalls.push(WithdrawCall({asset: asset, amount: amount, to: to}));
+        // Send underlying tokens to the recipient
+        IERC20(asset).transfer(to, amount);
+        return amount;
+    }
+
+    // ── Stubs for unused IAavePool functions ────────────────────────────
+
+    function flashLoanSimple(
+        address,
+        address,
+        uint256,
+        bytes calldata,
+        uint16
+    ) external pure override {
+        revert("MockAavePoolAdapter: flashLoanSimple not implemented");
+    }
+
+    function FLASHLOAN_PREMIUM_TOTAL() external pure override returns (uint128) {
+        return 0;
+    }
+
+    function getReserveData(
+        address
+    )
+        external
+        pure
+        override
+        returns (
+            uint256,
+            uint128,
+            uint128,
+            uint128,
+            uint128,
+            uint128,
+            uint40,
+            uint16,
+            address,
+            address,
+            address,
+            address,
+            uint128,
+            uint128,
+            uint128
+        )
+    {
+        revert("MockAavePoolAdapter: getReserveData not implemented");
+    }
+}
