@@ -3,10 +3,12 @@ pragma solidity ^0.8.28;
 
 library SepehrEvents {
     // ─── Subscriptions ───────────────────────────────────────────
-    event Subscribed(address indexed user, uint256 expiresAt, uint8 tier, uint256 chainId);
-    event Renewed(address indexed user, uint256 newExpiresAt, uint8 tier);
+    event Subscribed(address indexed user, uint256 expiresAt, uint8 tier, bool annual, uint256 chainId);
+    event Renewed(address indexed user, uint256 newExpiresAt, uint8 tier, bool annual);
     event Unsubscribed(address indexed user);
     event TierUpgraded(address indexed user, uint8 oldTier, uint8 newTier);
+    event TitanSubscriptionGranted(address indexed user, uint256 expiresAt);
+    event SaveCreditAccrued(address indexed user, uint256 amountUsd6, uint256 totalCredits);
 
     // ─── Positions ───────────────────────────────────────────────
     event ProtectionEnabled(
@@ -41,7 +43,7 @@ library SepehrEvents {
     event FeeCollected(address indexed keeper, uint256 totalFee, uint256 ownerShare, uint256 keeperShare);
     event OwnerFeesWithdrawn(address indexed to, uint256 amount);
     event KeeperFeesWithdrawn(address indexed keeper, uint256 amount);
-    event FeeBpsUpdated(uint256 oldBps, uint256 newBps);
+    event TierFeeBpsUpdated(uint8 indexed tier, uint256 oldBps, uint256 newBps);
 
     // ─── Admin ───────────────────────────────────────────────────
     event AdapterAdded(bytes32 indexed protocolKey, address adapter);

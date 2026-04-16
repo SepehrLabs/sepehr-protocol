@@ -8,6 +8,7 @@ interface ISepehrCore {
 
     struct Subscription {
         uint8 tier; // 1-4
+        bool annual;
         uint256 expiresAt;
         uint256 collateralValueUsdSnapshot;
     }
@@ -21,19 +22,16 @@ interface ISepehrCore {
 
     // ─── User Actions ────────────────────────────────────────────
 
-    /// @notice Subscribe to Sepehr protection.
-    /// @param tier The subscription tier (1-4).
-    /// @param paymentToken The token to pay with (USDC or WETH).
+    /// @notice Subscribe to Sepehr protection (tiers 1-3 self-service, tier 4 owner-only).
+    /// @param tier The subscription tier (1-3).
+    /// @param annual Whether to subscribe for a full year (20% discount).
     function subscribe(
         uint8 tier,
-        address paymentToken
+        bool annual
     ) external;
 
     /// @notice Renew an existing subscription for another billing period.
-    /// @param paymentToken The token to pay with.
-    function renew(
-        address paymentToken
-    ) external;
+    function renew() external;
 
     /// @notice Cancel the subscription. Remaining time is forfeited.
     function unsubscribe() external;
@@ -76,6 +74,7 @@ interface ISepehrCore {
     /// @param debtAsset The debt token to repay.
     /// @param collateralAsset The collateral token to withdraw and swap.
     /// @param repayAmount The amount of debt to repay.
+    /// @param repayValueUsd6 USD value of debt repaid (6 decimals), used for save credits.
     /// @param flashProviders Ordered list of flash-loan provider addresses to try.
     /// @param dexRouter The DEX router to use for the collateral→debt swap.
     /// @param dexRouteData Encoded route hints for the DEX.
@@ -85,6 +84,7 @@ interface ISepehrCore {
         address debtAsset,
         address collateralAsset,
         uint256 repayAmount,
+        uint256 repayValueUsd6,
         address[] calldata flashProviders,
         address dexRouter,
         bytes calldata dexRouteData
@@ -104,4 +104,8 @@ interface ISepehrCore {
     function isKeeper(
         address addr
     ) external view returns (bool);
+
+    function getSaveCredits(
+        address user
+    ) external view returns (uint256);
 }

@@ -7,9 +7,9 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import {SepehrCore} from "../../src/SepehrCore.sol";
 import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
+import {Percentages} from "../../src/libraries/Percentages.sol";
 import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
 import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
-import {Percentages} from "../../src/libraries/Percentages.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockDex} from "../../src/mocks/MockDex.sol";
 import {MockFlashLoan} from "../../src/mocks/MockFlashLoan.sol";
@@ -35,6 +35,7 @@ contract SepehrCoreTriggersTest is Test {
     MockAdapter public adapter;
     MockFlashLoan public flashLoan;
     MockDex public dex;
+    MockERC20 public usdc;
     MockERC20 public debtToken;
     MockERC20 public collateralToken;
 
@@ -42,31 +43,32 @@ contract SepehrCoreTriggersTest is Test {
     address public guardian = makeAddr("guardian");
     address public keeper = makeAddr("keeper");
     address public alice = makeAddr("alice");
+    address public bob = makeAddr("bob");
 
     bytes32 public constant PROTOCOL_KEY = keccak256("AAVE_V3");
     uint256 public constant REPAY_AMOUNT = 1000e18;
+    uint256 public constant REPAY_VALUE_USD6 = 1000e6;
     uint256 public constant HF_BELOW_THRESHOLD = 1.1e18;
     uint256 public constant HF_ABOVE_THRESHOLD = 1.5e18;
     uint256 public constant THRESHOLD_HF = 1.3e18;
-    uint256 public constant SUBSCRIPTION_PERIOD = 30 days;
+    uint256 public constant MONTHLY_PERIOD = 30 days;
+
+    // Shield tier fee: 20 bps (0.20%)
+    uint256 public constant SHIELD_FEE_BPS = 20;
 
     function setUp() public {
-        // Warp to a realistic timestamp to avoid cooldown false-positives.
-        // The cooldown check computes (block.timestamp - lastTriggerTime[user]).
-        // When lastTriggerTime is 0 and block.timestamp is near 0, the difference
-        // is less than COOLDOWN_SECONDS (3600), causing spurious reverts.
         vm.warp(10_000);
 
         oracle = new MockOracle();
         adapter = new MockAdapter();
         flashLoan = new MockFlashLoan();
         dex = new MockDex();
+        usdc = new MockERC20("USDC", "USDC");
         debtToken = new MockERC20("Debt Token", "DEBT");
         collateralToken = new MockERC20("Collateral Token", "COLL");
 
-        core = new SepehrCore(address(this), timelock, guardian, address(oracle), 500e8, 30);
+        core = new SepehrCore(address(this), timelock, guardian, address(oracle), address(usdc), 500e8);
 
-        // Register adapter, keeper, flash provider, dex router via timelock
         vm.startPrank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
         core.addKeeper(keeper);
@@ -74,30 +76,22 @@ contract SepehrCoreTriggersTest is Test {
         core.addDexRouter(address(dex));
         vm.stopPrank();
 
-        // Set up alice with a subscription
-        MockERC20 usdc = new MockERC20("USDC", "USDC");
-        usdc.mint(alice, 200e18);
+        // Subscribe alice (Shield tier — monthly)
+        usdc.mint(alice, 200e6);
         vm.prank(alice);
         usdc.approve(address(core), type(uint256).max);
         vm.prank(alice);
-        core.subscribe(1, address(usdc));
+        core.subscribe(1, false);
 
-        // Set delegation for alice
         adapter.setDelegation(alice, true);
 
-        // Enable protection for alice
         vm.prank(alice);
         core.enableProtection(PROTOCOL_KEY, THRESHOLD_HF, 500, 2500);
 
-        // Set up adapter: HF below threshold before execution, above after
         adapter.setHealthFactor(alice, HF_BELOW_THRESHOLD);
 
-        // Fund mock contracts with tokens for the flash loan flow
-        // Flash loan provider needs debt tokens to lend
         debtToken.mint(address(flashLoan), REPAY_AMOUNT * 2);
-        // Adapter needs collateral tokens to withdraw
         collateralToken.mint(address(adapter), REPAY_AMOUNT * 2);
-        // Dex needs debt tokens to give back after swap
         debtToken.mint(address(dex), REPAY_AMOUNT * 2);
     }
 
@@ -112,13 +106,10 @@ contract SepehrCoreTriggersTest is Test {
     // ─── Success ────────────────────────────────────────────────
 
     function test_execute_success() public {
-        // Use SequentialMockAdapter that returns HF_BELOW_THRESHOLD on first call (pre-check)
-        // and HF_ABOVE_THRESHOLD on second call (post-check).
         SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
         seqAdapter.setDelegation(alice, true);
         debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
 
-        // Register this new adapter under a different key
         bytes32 seqKey = keccak256("SEQ_PROTOCOL");
         vm.prank(timelock);
         core.addAdapter(seqKey, address(seqAdapter));
@@ -129,16 +120,136 @@ contract SepehrCoreTriggersTest is Test {
         address[] memory providers = _buildFlashProviders();
 
         vm.prank(keeper);
-        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
 
-        // Verify lastTriggerTime was set
         assertEq(core.lastTriggerTime(alice), block.timestamp);
 
-        // Verify fee accounting
-        uint256 totalFee = Percentages.applyBps(REPAY_AMOUNT, 30);
+        // Fee uses per-tier BPS (Shield = 20 bps)
+        uint256 totalFee = Percentages.applyBps(REPAY_AMOUNT, SHIELD_FEE_BPS);
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(totalFee);
         assertEq(core.ownerFeeBalance(), ownerShare);
         assertEq(core.keeperFeeBalances(keeper), keeperShare);
+    }
+
+    function test_execute_updatesSaveCredits() public {
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(alice, true);
+        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
+
+        bytes32 seqKey = keccak256("SAVE_CREDIT_PROTOCOL");
+        vm.prank(timelock);
+        core.addAdapter(seqKey, address(seqAdapter));
+
+        vm.prank(alice);
+        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+
+        address[] memory providers = _buildFlashProviders();
+
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+
+        assertEq(core.getSaveCredits(alice), REPAY_VALUE_USD6);
+    }
+
+    function test_execute_saveCreditsCumulative() public {
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(alice, true);
+        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 20);
+
+        bytes32 seqKey = keccak256("CUMULATIVE_PROTOCOL");
+        vm.prank(timelock);
+        core.addAdapter(seqKey, address(seqAdapter));
+
+        vm.prank(alice);
+        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+
+        address[] memory providers = _buildFlashProviders();
+
+        // First execution
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+
+        // Warp past cooldown, reset adapter
+        vm.warp(block.timestamp + 3601);
+        seqAdapter.reset(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        debtToken.mint(address(flashLoan), REPAY_AMOUNT * 10);
+
+        // Second execution
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+
+        assertEq(core.getSaveCredits(alice), REPAY_VALUE_USD6 * 2);
+    }
+
+    function test_execute_emitsSaveCreditEvent() public {
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(alice, true);
+        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
+
+        bytes32 seqKey = keccak256("SAVE_EVENT_PROTOCOL");
+        vm.prank(timelock);
+        core.addAdapter(seqKey, address(seqAdapter));
+
+        vm.prank(alice);
+        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+
+        address[] memory providers = _buildFlashProviders();
+
+        vm.expectEmit(true, false, false, true, address(core));
+        emit SepehrEvents.SaveCreditAccrued(alice, REPAY_VALUE_USD6, REPAY_VALUE_USD6);
+
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
     }
 
     function test_execute_emitsTriggeredEvent() public {
@@ -158,7 +269,17 @@ contract SepehrCoreTriggersTest is Test {
         emit SepehrEvents.Triggered(alice, seqKey, keeper, REPAY_AMOUNT, 0, HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD, 0);
 
         vm.prank(keeper);
-        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
     }
 
     function test_execute_emitsFeeCollectedEvent() public {
@@ -174,14 +295,67 @@ contract SepehrCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
 
-        uint256 totalFee = Percentages.applyBps(REPAY_AMOUNT, 30);
+        uint256 totalFee = Percentages.applyBps(REPAY_AMOUNT, SHIELD_FEE_BPS);
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(totalFee);
 
         vm.expectEmit(true, false, false, true, address(core));
         emit SepehrEvents.FeeCollected(keeper, totalFee, ownerShare, keeperShare);
 
         vm.prank(keeper);
-        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+    }
+
+    // ─── Per-tier fee validation ────────────────────────────────
+
+    function test_execute_guardianTierUsesCorrectFee() public {
+        // Subscribe bob as Guardian (tier 2) — fee should be 10 bps
+        usdc.mint(bob, 200e6);
+        vm.prank(bob);
+        usdc.approve(address(core), type(uint256).max);
+        vm.prank(bob);
+        core.subscribe(2, false);
+
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(bob, true);
+        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
+
+        bytes32 seqKey = keccak256("GUARDIAN_FEE_PROTOCOL");
+        vm.prank(timelock);
+        core.addAdapter(seqKey, address(seqAdapter));
+
+        vm.prank(bob);
+        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+
+        address[] memory providers = _buildFlashProviders();
+
+        vm.prank(keeper);
+        core.execute(
+            bob,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+
+        // Guardian fee = 10 bps
+        uint256 totalFee = Percentages.applyBps(REPAY_AMOUNT, 10);
+        (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(totalFee);
+        assertEq(core.ownerFeeBalance(), ownerShare);
+        assertEq(core.keeperFeeBalances(keeper), keeperShare);
     }
 
     // ─── Reverts ────────────────────────────────────────────────
@@ -193,7 +367,15 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(SepehrErrors.NotKeeper.selector);
         vm.prank(notKeeper);
         core.execute(
-            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
+            alice,
+            PROTOCOL_KEY,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
         );
     }
 
@@ -204,7 +386,15 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(SepehrErrors.ContractPaused.selector);
         vm.prank(keeper);
         core.execute(
-            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
+            alice,
+            PROTOCOL_KEY,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
         );
     }
 
@@ -217,12 +407,19 @@ contract SepehrCoreTriggersTest is Test {
         );
         vm.prank(keeper);
         core.execute(
-            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
+            alice,
+            PROTOCOL_KEY,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
         );
     }
 
     function test_execute_revertsOnCooldown() public {
-        // First successful execution
         SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
         seqAdapter.setDelegation(alice, true);
         debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
@@ -236,16 +433,34 @@ contract SepehrCoreTriggersTest is Test {
         address[] memory providers = _buildFlashProviders();
 
         vm.prank(keeper);
-        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
 
-        // Reset adapter call count so it returns below threshold again for the pre-check
         seqAdapter.reset(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
 
-        // Try again immediately — should hit cooldown
-        uint256 remaining = 3600; // COOLDOWN_SECONDS
+        uint256 remaining = 3600;
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.CooldownActive.selector, remaining));
         vm.prank(keeper);
-        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
     }
 
     function test_execute_succeedsAfterCooldown() public {
@@ -261,38 +476,61 @@ contract SepehrCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
 
-        // First execution
         debtToken.mint(address(flashLoan), REPAY_AMOUNT * 10);
         vm.prank(keeper);
-        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
 
-        // Warp past cooldown
         vm.warp(block.timestamp + 3601);
         seqAdapter.reset(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
         debtToken.mint(address(flashLoan), REPAY_AMOUNT * 10);
 
-        // Second execution should succeed
         vm.prank(keeper);
-        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
     }
 
     function test_execute_revertsWhenSubscriptionExpired() public {
-        // Warp past subscription period
-        vm.warp(block.timestamp + SUBSCRIPTION_PERIOD + 1);
+        vm.warp(block.timestamp + MONTHLY_PERIOD + 1);
 
         address[] memory providers = _buildFlashProviders();
 
         vm.expectRevert(SepehrErrors.SubscriptionExpired.selector);
         vm.prank(keeper);
         core.execute(
-            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
+            alice,
+            PROTOCOL_KEY,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
         );
     }
 
     function test_execute_revertsWhenProtectionNotEnabled() public {
         bytes32 unknownKey = keccak256("UNKNOWN_PROTOCOL");
 
-        // Register the adapter but don't enable protection for alice on it
         vm.prank(timelock);
         core.addAdapter(unknownKey, address(adapter));
 
@@ -301,7 +539,15 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.ProtectionNotEnabled.selector, alice, unknownKey));
         vm.prank(keeper);
         core.execute(
-            alice, unknownKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
+            alice,
+            unknownKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
         );
     }
 
@@ -313,14 +559,21 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.DelegationRevoked.selector, alice, PROTOCOL_KEY));
         vm.prank(keeper);
         core.execute(
-            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
+            alice,
+            PROTOCOL_KEY,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
         );
     }
 
     function test_execute_revertsWhenNoFlashProviderAvailable() public {
         adapter.setHealthFactor(alice, HF_BELOW_THRESHOLD);
 
-        // Pass an empty flash providers array
         address[] memory emptyProviders = new address[](0);
 
         vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
@@ -331,6 +584,7 @@ contract SepehrCoreTriggersTest is Test {
             address(debtToken),
             address(collateralToken),
             REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
             emptyProviders,
             address(dex),
             ""
@@ -340,7 +594,6 @@ contract SepehrCoreTriggersTest is Test {
     function test_execute_revertsWhenFlashProviderUnavailable() public {
         adapter.setHealthFactor(alice, HF_BELOW_THRESHOLD);
 
-        // Make the flash loan provider unavailable
         flashLoan.setShouldRevert(true);
 
         address[] memory providers = _buildFlashProviders();
@@ -348,7 +601,15 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         vm.prank(keeper);
         core.execute(
-            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
+            alice,
+            PROTOCOL_KEY,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
         );
     }
 
@@ -358,7 +619,9 @@ contract SepehrCoreTriggersTest is Test {
 
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         vm.prank(keeper);
-        core.execute(alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), 0, providers, address(dex), "");
+        core.execute(
+            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), 0, 0, providers, address(dex), ""
+        );
     }
 
     function test_execute_revertsOnUnauthorizedDexRouter() public {
@@ -369,7 +632,15 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(SepehrErrors.NotAuthorized.selector);
         vm.prank(keeper);
         core.execute(
-            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, fakeDex, ""
+            alice,
+            PROTOCOL_KEY,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            fakeDex,
+            ""
         );
     }
 
@@ -380,15 +651,20 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(SepehrErrors.SubscriptionNotFound.selector);
         vm.prank(keeper);
         core.execute(
-            bob, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
+            bob,
+            PROTOCOL_KEY,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
         );
     }
 }
 
 /// @dev A mock adapter that simulates HF improvement after repayment.
-///      getHealthFactor is view (called via staticcall), so we cannot track call count.
-///      Instead, repay() updates the stored HF to the post-execution value, mimicking
-///      real behavior where repaying debt improves the health factor.
 contract SequentialMockAdapter {
     mapping(address => bool) public delegations;
     uint256 public currentHF;
@@ -435,7 +711,6 @@ contract SequentialMockAdapter {
         uint256 amount
     ) external {
         ERC20(debtAsset).transfer(address(0xdead), amount);
-        // Simulate HF improvement after debt repayment
         currentHF = postRepayHF;
     }
 

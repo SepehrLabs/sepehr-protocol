@@ -4,8 +4,8 @@ pragma solidity ^0.8.28;
 import {AaveFlashLoanProvider} from "../../src/flash/AaveFlashLoanProvider.sol";
 import {BalancerFlashLoanProvider} from "../../src/flash/BalancerFlashLoanProvider.sol";
 import {UniswapV3FlashLoanProvider} from "../../src/flash/UniswapV3FlashLoanProvider.sol";
-import {ISepehrCallback} from "../../src/interfaces/ISepehrCallback.sol";
 import {IFlashLoanProvider} from "../../src/interfaces/IFlashLoanProvider.sol";
+import {ISepehrCallback} from "../../src/interfaces/ISepehrCallback.sol";
 import {ForkTestBase} from "./ForkTestBase.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 

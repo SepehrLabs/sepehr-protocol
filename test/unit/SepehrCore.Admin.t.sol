@@ -6,8 +6,8 @@ import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import {SepehrCore} from "../../src/SepehrCore.sol";
-import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
 import {IProtocolAdapter} from "../../src/interfaces/IProtocolAdapter.sol";
+import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
 import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
 import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
@@ -31,6 +31,7 @@ contract SepehrCoreAdminTest is Test {
     SepehrCore public core;
     MockOracle public oracle;
     MockAdapter public adapter;
+    MockERC20 public usdc;
 
     address public timelock = makeAddr("timelock");
     address public guardian = makeAddr("guardian");
@@ -42,8 +43,9 @@ contract SepehrCoreAdminTest is Test {
         owner = address(this);
         oracle = new MockOracle();
         adapter = new MockAdapter();
+        usdc = new MockERC20("USD Coin", "USDC");
 
-        core = new SepehrCore(owner, timelock, guardian, address(oracle), 500e8, 30);
+        core = new SepehrCore(owner, timelock, guardian, address(oracle), address(usdc), 500e8);
     }
 
     // ─── addAdapter ─────────────────────────────────────────────
@@ -210,33 +212,59 @@ contract SepehrCoreAdminTest is Test {
         core.removeKeeper(makeAddr("keeper"));
     }
 
-    // ─── setFeeBps ──────────────────────────────────────────────
+    // ─── setTierFeeBps ──────────────────────────────────────────
 
-    function test_setFeeBps() public {
+    function test_setTierFeeBps() public {
         vm.prank(timelock);
-        core.setFeeBps(50);
+        core.setTierFeeBps(1, 50);
 
-        assertEq(core.feeBps(), 50);
+        assertEq(core.TIER_FEE_BPS(0), 50);
     }
 
-    function test_setFeeBps_emitsEvent() public {
-        vm.expectEmit(false, false, false, true, address(core));
-        emit SepehrEvents.FeeBpsUpdated(30, 50);
+    function test_setTierFeeBps_emitsEvent() public {
+        vm.expectEmit(true, false, false, true, address(core));
+        emit SepehrEvents.TierFeeBpsUpdated(1, 20, 50);
 
         vm.prank(timelock);
-        core.setFeeBps(50);
+        core.setTierFeeBps(1, 50);
     }
 
-    function test_setFeeBps_revertsOnNonTimelock() public {
+    function test_setTierFeeBps_revertsOnNonTimelock() public {
         vm.expectRevert(SepehrErrors.NotTimelock.selector);
-        core.setFeeBps(50);
+        core.setTierFeeBps(1, 50);
     }
 
-    function test_setFeeBps_canSetToZero() public {
+    function test_setTierFeeBps_revertsOnInvalidTier() public {
+        vm.expectRevert(SepehrErrors.InvalidTier.selector);
         vm.prank(timelock);
-        core.setFeeBps(0);
+        core.setTierFeeBps(0, 50);
+    }
 
-        assertEq(core.feeBps(), 0);
+    function test_setTierFeeBps_revertsOnTierFive() public {
+        vm.expectRevert(SepehrErrors.InvalidTier.selector);
+        vm.prank(timelock);
+        core.setTierFeeBps(5, 50);
+    }
+
+    function test_setTierFeeBps_canSetToZero() public {
+        vm.prank(timelock);
+        core.setTierFeeBps(1, 0);
+
+        assertEq(core.TIER_FEE_BPS(0), 0);
+    }
+
+    function test_setTierFeeBps_allTiers() public {
+        vm.startPrank(timelock);
+        core.setTierFeeBps(1, 15);
+        core.setTierFeeBps(2, 8);
+        core.setTierFeeBps(3, 3);
+        core.setTierFeeBps(4, 2);
+        vm.stopPrank();
+
+        assertEq(core.TIER_FEE_BPS(0), 15);
+        assertEq(core.TIER_FEE_BPS(1), 8);
+        assertEq(core.TIER_FEE_BPS(2), 3);
+        assertEq(core.TIER_FEE_BPS(3), 2);
     }
 
     // ─── pause ──────────────────────────────────────────────────
@@ -484,24 +512,57 @@ contract SepehrCoreAdminTest is Test {
 
     function test_constructor_revertsOnZeroTimelock() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, address(0), guardian, address(oracle), 500e8, 30);
+        new SepehrCore(owner, address(0), guardian, address(oracle), address(usdc), 500e8);
     }
 
     function test_constructor_revertsOnZeroGuardian() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, timelock, address(0), address(oracle), 500e8, 30);
+        new SepehrCore(owner, timelock, address(0), address(oracle), address(usdc), 500e8);
     }
 
     function test_constructor_revertsOnZeroOracle() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, timelock, guardian, address(0), 500e8, 30);
+        new SepehrCore(owner, timelock, guardian, address(0), address(usdc), 500e8);
+    }
+
+    function test_constructor_revertsOnZeroUsdc() public {
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        new SepehrCore(owner, timelock, guardian, address(oracle), address(0), 500e8);
     }
 
     function test_constructor_setsInitialValues() public {
         assertEq(core.timelock(), timelock);
         assertEq(core.pauseGuardian(), guardian);
         assertEq(core.minCollateralUsd(), 500e8);
-        assertEq(core.feeBps(), 30);
+        assertEq(address(core.usdc()), address(usdc));
         assertEq(core.owner(), owner);
+    }
+
+    // ─── Tier pricing defaults ──────────────────────────────────
+
+    function test_tierFeeBps_defaults() public view {
+        assertEq(core.TIER_FEE_BPS(0), 20); // Shield
+        assertEq(core.TIER_FEE_BPS(1), 10); // Guardian
+        assertEq(core.TIER_FEE_BPS(2), 5); // Watchtower
+        assertEq(core.TIER_FEE_BPS(3), 5); // Titan
+    }
+
+    function test_tierMaxCollateral_defaults() public view {
+        assertEq(core.TIER_MAX_COLLATERAL_USD_8(0), 15_000e8);
+        assertEq(core.TIER_MAX_COLLATERAL_USD_8(1), 100_000e8);
+        assertEq(core.TIER_MAX_COLLATERAL_USD_8(2), 300_000e8);
+        assertEq(core.TIER_MAX_COLLATERAL_USD_8(3), type(uint256).max);
+    }
+
+    function test_tierPricesMonthly_defaults() public view {
+        assertEq(core.TIER_PRICES_MONTHLY_USD_6(0), 9_000_000);
+        assertEq(core.TIER_PRICES_MONTHLY_USD_6(1), 49_000_000);
+        assertEq(core.TIER_PRICES_MONTHLY_USD_6(2), 200_000_000);
+    }
+
+    function test_tierPricesAnnual_defaults() public view {
+        assertEq(core.TIER_PRICES_ANNUAL_USD_6(0), 86_400_000);
+        assertEq(core.TIER_PRICES_ANNUAL_USD_6(1), 470_400_000);
+        assertEq(core.TIER_PRICES_ANNUAL_USD_6(2), 1_920_000_000);
     }
 }

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-import {ISepehrCallback} from "../interfaces/ISepehrCallback.sol";
 import {IFlashLoanProvider} from "../interfaces/IFlashLoanProvider.sol";
+import {ISepehrCallback} from "../interfaces/ISepehrCallback.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract MockFlashLoan is IFlashLoanProvider {

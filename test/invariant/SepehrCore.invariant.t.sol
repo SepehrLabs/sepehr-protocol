@@ -9,7 +9,7 @@ import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockDex} from "../../src/mocks/MockDex.sol";
 import {MockFlashLoan} from "../../src/mocks/MockFlashLoan.sol";
 import {MockOracle} from "../../src/mocks/MockOracle.sol";
-import {SepehrCoreHandler, InvariantERC20} from "./SepehrCoreHandler.sol";
+import {InvariantERC20, SepehrCoreHandler} from "./SepehrCoreHandler.sol";
 
 contract SepehrCoreInvariantTest is Test {
     SepehrCore public core;
@@ -36,7 +36,7 @@ contract SepehrCoreInvariantTest is Test {
         flashLoan = new MockFlashLoan();
         dex = new MockDex();
 
-        core = new SepehrCore(owner, timelock, guardian, address(oracle), 500e8, 30);
+        core = new SepehrCore(owner, timelock, guardian, address(oracle), address(usdc), 500e8);
 
         vm.startPrank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
@@ -100,10 +100,13 @@ contract SepehrCoreInvariantTest is Test {
         }
     }
 
-    // ── Invariant 5: Fee BPS never changed without timelock ─────────
+    // ── Invariant 5: Tier fee BPS unchanged without timelock ───────
 
-    function invariant_feeBpsIsSet() public view {
-        assertEq(core.feeBps(), 30, "feeBps should remain 30 (only timelock can change)");
+    function invariant_tierFeeBpsUnchanged() public view {
+        assertEq(core.TIER_FEE_BPS(0), 20, "Shield fee should remain 20 bps");
+        assertEq(core.TIER_FEE_BPS(1), 10, "Guardian fee should remain 10 bps");
+        assertEq(core.TIER_FEE_BPS(2), 5, "Watchtower fee should remain 5 bps");
+        assertEq(core.TIER_FEE_BPS(3), 5, "Titan fee should remain 5 bps");
     }
 
     // ── Invariant 6: Adapter remains registered ─────────────────────

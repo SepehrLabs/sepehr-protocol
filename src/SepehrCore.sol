@@ -6,16 +6,16 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-import {ISepehrCallback} from "./interfaces/ISepehrCallback.sol";
-import {ISepehrCore} from "./interfaces/ISepehrCore.sol";
 import {IDexRouter} from "./interfaces/IDexRouter.sol";
 import {IFlashLoanProvider} from "./interfaces/IFlashLoanProvider.sol";
 import {IProtocolAdapter} from "./interfaces/IProtocolAdapter.sol";
+import {ISepehrCallback} from "./interfaces/ISepehrCallback.sol";
+import {ISepehrCore} from "./interfaces/ISepehrCore.sol";
 import {ISubscriptionOracle} from "./interfaces/ISubscriptionOracle.sol";
-import {SepehrErrors} from "./libraries/SepehrErrors.sol";
-import {SepehrEvents} from "./libraries/SepehrEvents.sol";
 import {HealthFactorMath} from "./libraries/HealthFactorMath.sol";
 import {Percentages} from "./libraries/Percentages.sol";
+import {SepehrErrors} from "./libraries/SepehrErrors.sol";
+import {SepehrEvents} from "./libraries/SepehrEvents.sol";
 
 contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -25,28 +25,41 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     uint256 public constant MAX_REPAY_BPS = 5000;
     uint256 public constant MAX_SLIPPAGE_BPS = 2000;
     uint256 public constant COOLDOWN_SECONDS = 3600;
-    uint256 public constant SUBSCRIPTION_PERIOD = 30 days;
+    uint256 public constant MONTHLY_PERIOD = 30 days;
+    uint256 public constant ANNUAL_PERIOD = 365 days;
 
-    uint256[4] public TIER_PRICES_USD_6 = [
-        9_990_000, // $9.99
-        29_990_000, // $29.99
-        79_990_000, // $79.99
-        149_990_000 // $149.99
+    uint256[3] public TIER_PRICES_MONTHLY_USD_6 = [
+        9_000_000, // Shield: $9/mo
+        49_000_000, // Guardian: $49/mo
+        200_000_000 // Watchtower: $200/mo
+    ];
+
+    uint256[3] public TIER_PRICES_ANNUAL_USD_6 = [
+        86_400_000, // Shield: $86.40/yr
+        470_400_000, // Guardian: $470.40/yr
+        1_920_000_000 // Watchtower: $1,920/yr
+    ];
+
+    uint256[4] public TIER_FEE_BPS = [
+        20, // Shield: 0.20%
+        10, // Guardian: 0.10%
+        5, // Watchtower: 0.05%
+        5 // Titan: 0.05%
     ];
 
     uint256[4] public TIER_MAX_COLLATERAL_USD_8 = [
-        10_000e8, // tier 1: up to $10k
-        50_000e8, // tier 2: up to $50k
-        200_000e8, // tier 3: up to $200k
-        type(uint256).max // tier 4: unlimited
+        15_000e8, // Shield: up to $15k
+        100_000e8, // Guardian: up to $100k
+        300_000e8, // Watchtower: up to $300k
+        type(uint256).max // Titan: unlimited
     ];
 
     // ─── State ───────────────────────────────────────────────────
+    IERC20 public immutable usdc;
     ISubscriptionOracle public subscriptionOracle;
     address public pauseGuardian;
     address public timelock;
     bool public paused;
-    uint256 public feeBps = 30; // 0.3%
     uint256 public minCollateralUsd;
 
     mapping(address => bool) public keepers;
@@ -66,6 +79,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
     uint256 public ownerFeeBalance;
     mapping(address => uint256) public keeperFeeBalances;
+    mapping(address => uint256) public saveCredits;
 
     address private _activeFlashProvider;
 
@@ -98,18 +112,19 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         address _timelock,
         address _pauseGuardian,
         address _subscriptionOracle,
-        uint256 _minCollateralUsd,
-        uint256 _feeBps
+        address _usdc,
+        uint256 _minCollateralUsd
     ) Ownable(_owner) {
         if (_timelock == address(0)) revert SepehrErrors.ZeroAddress();
         if (_pauseGuardian == address(0)) revert SepehrErrors.ZeroAddress();
         if (_subscriptionOracle == address(0)) revert SepehrErrors.ZeroAddress();
+        if (_usdc == address(0)) revert SepehrErrors.ZeroAddress();
 
         timelock = _timelock;
         pauseGuardian = _pauseGuardian;
         subscriptionOracle = ISubscriptionOracle(_subscriptionOracle);
+        usdc = IERC20(_usdc);
         minCollateralUsd = _minCollateralUsd;
-        feeBps = _feeBps;
     }
 
     // ─── User: Subscriptions ─────────────────────────────────────
@@ -117,36 +132,39 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @inheritdoc ISepehrCore
     function subscribe(
         uint8 tier,
-        address paymentToken
+        bool annual
     ) external override nonReentrant whenNotPaused {
         if (tier == 0 || tier > 4) revert SepehrErrors.InvalidTier();
+        if (tier == 4) revert SepehrErrors.TitanSelfSubscribeNotAllowed();
         if (_subscriptions[msg.sender].expiresAt > block.timestamp) {
             revert SepehrErrors.SubscriptionAlreadyActive();
         }
 
-        uint256 price = TIER_PRICES_USD_6[tier - 1];
-        IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), price);
+        uint256 price = annual ? TIER_PRICES_ANNUAL_USD_6[tier - 1] : TIER_PRICES_MONTHLY_USD_6[tier - 1];
+        usdc.safeTransferFrom(msg.sender, address(this), price);
 
-        _subscriptions[msg.sender] =
-            Subscription({tier: tier, expiresAt: block.timestamp + SUBSCRIPTION_PERIOD, collateralValueUsdSnapshot: 0});
+        uint256 duration = annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
+        _subscriptions[msg.sender] = Subscription({
+            tier: tier, annual: annual, expiresAt: block.timestamp + duration, collateralValueUsdSnapshot: 0
+        });
 
-        emit SepehrEvents.Subscribed(msg.sender, block.timestamp + SUBSCRIPTION_PERIOD, tier, block.chainid);
+        emit SepehrEvents.Subscribed(msg.sender, block.timestamp + duration, tier, annual, block.chainid);
     }
 
     /// @inheritdoc ISepehrCore
-    function renew(
-        address paymentToken
-    ) external override nonReentrant whenNotPaused {
+    function renew() external override nonReentrant whenNotPaused {
         Subscription storage sub = _subscriptions[msg.sender];
         if (sub.tier == 0) revert SepehrErrors.SubscriptionNotFound();
+        if (sub.tier == 4) revert SepehrErrors.TitanSelfSubscribeNotAllowed();
 
-        uint256 price = TIER_PRICES_USD_6[sub.tier - 1];
-        IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), price);
+        uint256 price = sub.annual ? TIER_PRICES_ANNUAL_USD_6[sub.tier - 1] : TIER_PRICES_MONTHLY_USD_6[sub.tier - 1];
+        usdc.safeTransferFrom(msg.sender, address(this), price);
 
+        uint256 duration = sub.annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
         uint256 baseTime = sub.expiresAt > block.timestamp ? sub.expiresAt : block.timestamp;
-        sub.expiresAt = baseTime + SUBSCRIPTION_PERIOD;
+        sub.expiresAt = baseTime + duration;
 
-        emit SepehrEvents.Renewed(msg.sender, sub.expiresAt, sub.tier);
+        emit SepehrEvents.Renewed(msg.sender, sub.expiresAt, sub.tier, sub.annual);
     }
 
     /// @inheritdoc ISepehrCore
@@ -229,6 +247,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         address debtAsset,
         address collateralAsset,
         uint256 repayAmount,
+        uint256 repayValueUsd6,
         address[] calldata flashProviders,
         address dexRouter,
         bytes calldata dexRouteData
@@ -262,8 +281,17 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
         lastTriggerTime[user] = block.timestamp;
 
+        uint256 userFeeBps = TIER_FEE_BPS[_subscriptions[user].tier - 1];
         bytes memory callbackData = abi.encode(
-            user, protocolKey, debtAsset, collateralAsset, repayAmount, dexRouter, dexRouteData, prot.maxSlippageBps
+            user,
+            protocolKey,
+            debtAsset,
+            collateralAsset,
+            repayAmount,
+            dexRouter,
+            dexRouteData,
+            prot.maxSlippageBps,
+            userFeeBps
         );
 
         _borrowFlashLoan(flashProviders, debtAsset, repayAmount, callbackData);
@@ -273,14 +301,17 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             revert SepehrErrors.PostExecutionHFBelowThreshold(hfAfter, prot.thresholdHF);
         }
 
-        uint256 totalFee = Percentages.applyBps(repayAmount, feeBps);
+        uint256 totalFee = Percentages.applyBps(repayAmount, userFeeBps);
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(totalFee);
 
         ownerFeeBalance += ownerShare;
         keeperFeeBalances[msg.sender] += keeperShare;
 
+        saveCredits[user] += repayValueUsd6;
+
         emit SepehrEvents.Triggered(user, protocolKey, msg.sender, repayAmount, 0, hfBefore, hfAfter, totalFee);
         emit SepehrEvents.FeeCollected(msg.sender, totalFee, ownerShare, keeperShare);
+        emit SepehrEvents.SaveCreditAccrued(user, repayValueUsd6, saveCredits[user]);
     }
 
     // ─── Flash Loan Callback ─────────────────────────────────────
@@ -304,15 +335,16 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             uint256 repayAmount,
             address dexRouter,
             bytes memory dexRouteData,
-            uint256 maxSlippageBps
-        ) = abi.decode(data, (address, bytes32, address, address, uint256, address, bytes, uint256));
+            uint256 maxSlippageBps,
+            uint256 triggerFeeBps
+        ) = abi.decode(data, (address, bytes32, address, address, uint256, address, bytes, uint256, uint256));
 
         IProtocolAdapter adapter = adapters[protocolKey].adapter;
 
         IERC20(debtAsset).safeTransfer(address(adapter), repayAmount);
         adapter.repay(user, debtAsset, repayAmount);
 
-        uint256 collateralNeeded = repayAmount + fee + Percentages.applyBpsRoundUp(repayAmount, feeBps);
+        uint256 collateralNeeded = repayAmount + fee + Percentages.applyBpsRoundUp(repayAmount, triggerFeeBps);
         adapter.withdrawCollateral(user, collateralAsset, collateralNeeded, address(this));
 
         if (collateralAsset != debtAsset) {
@@ -334,24 +366,21 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     // ─── Fees ────────────────────────────────────────────────────
 
     function withdrawOwnerFees(
-        address token,
         address to
     ) external nonReentrant {
         if (msg.sender != owner()) revert SepehrErrors.NotOwner();
         uint256 amount = ownerFeeBalance;
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         ownerFeeBalance = 0;
-        IERC20(token).safeTransfer(to, amount);
+        usdc.safeTransfer(to, amount);
         emit SepehrEvents.OwnerFeesWithdrawn(to, amount);
     }
 
-    function withdrawKeeperFees(
-        address token
-    ) external nonReentrant {
+    function withdrawKeeperFees() external nonReentrant {
         uint256 amount = keeperFeeBalances[msg.sender];
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         keeperFeeBalances[msg.sender] = 0;
-        IERC20(token).safeTransfer(msg.sender, amount);
+        usdc.safeTransfer(msg.sender, amount);
         emit SepehrEvents.KeeperFeesWithdrawn(msg.sender, amount);
     }
 
@@ -423,12 +452,30 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.KeeperRemoved(keeper);
     }
 
-    function setFeeBps(
-        uint256 newFeeBps
+    function setTierFeeBps(
+        uint8 tier,
+        uint256 newBps
     ) external onlyTimelock {
-        uint256 old = feeBps;
-        feeBps = newFeeBps;
-        emit SepehrEvents.FeeBpsUpdated(old, newFeeBps);
+        if (tier == 0 || tier > 4) revert SepehrErrors.InvalidTier();
+        uint256 old = TIER_FEE_BPS[tier - 1];
+        TIER_FEE_BPS[tier - 1] = newBps;
+        emit SepehrEvents.TierFeeBpsUpdated(tier, old, newBps);
+    }
+
+    /// @notice Grant a Titan (tier 4) subscription. Owner-only, no USDC charge.
+    function grantTitanSubscription(
+        address user,
+        uint256 durationSeconds
+    ) external {
+        if (msg.sender != owner()) revert SepehrErrors.NotOwner();
+        if (user == address(0)) revert SepehrErrors.ZeroAddress();
+        if (durationSeconds == 0) revert SepehrErrors.ZeroAmount();
+
+        _subscriptions[user] = Subscription({
+            tier: 4, annual: false, expiresAt: block.timestamp + durationSeconds, collateralValueUsdSnapshot: 0
+        });
+
+        emit SepehrEvents.TitanSubscriptionGranted(user, block.timestamp + durationSeconds);
     }
 
     function addFlashLoanProvider(
@@ -490,6 +537,13 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         address addr
     ) external view override returns (bool) {
         return keepers[addr];
+    }
+
+    /// @inheritdoc ISepehrCore
+    function getSaveCredits(
+        address user
+    ) external view override returns (uint256) {
+        return saveCredits[user];
     }
 
     // ─── Internal ────────────────────────────────────────────────

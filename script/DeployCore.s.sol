@@ -12,7 +12,7 @@ contract DeployCore is Script {
         address deployer = vm.envAddress("DEPLOYER_ADDRESS");
         address owner = vm.envAddress("SEPEHR_OWNER");
         address pauseGuardian = vm.envAddress("SEPEHR_PAUSE_GUARDIAN");
-        uint256 feeBps = vm.envUint("SEPEHR_FEE_BPS");
+        address usdcAddress = vm.envAddress("USDC_ADDRESS");
         uint256 timelockDelay = vm.envOr("SEPEHR_TIMELOCK_DELAY_SECONDS", uint256(172_800));
         uint256 minCollateralUsd = vm.envOr("SEPEHR_MIN_COLLATERAL_USD", uint256(500e8));
         bool useMockOracle = vm.envOr("USE_MOCK_ORACLE", false);
@@ -36,7 +36,8 @@ contract DeployCore is Script {
             oracleAddr = vm.envAddress("SUBSCRIPTION_ORACLE");
         }
 
-        SepehrCore core = new SepehrCore(owner, address(timelock), pauseGuardian, oracleAddr, minCollateralUsd, feeBps);
+        SepehrCore core =
+            new SepehrCore(owner, address(timelock), pauseGuardian, oracleAddr, usdcAddress, minCollateralUsd);
         console.log("SepehrCore deployed at:", address(core));
 
         vm.stopBroadcast();

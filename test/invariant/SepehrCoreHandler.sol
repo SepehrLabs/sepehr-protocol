@@ -85,16 +85,17 @@ contract SepehrCoreHandler is Test {
 
     function subscribe(
         uint256 actorSeed,
-        uint8 tier
+        uint8 tier,
+        bool annual
     ) external {
         address actor = _getActor(actorSeed);
-        tier = uint8(bound(tier, 1, 4));
+        tier = uint8(bound(tier, 1, 3));
 
         ISepehrCore.Subscription memory sub = core.getSubscription(actor);
         if (sub.expiresAt > block.timestamp) return;
 
         vm.prank(actor);
-        try core.subscribe(tier, address(usdc)) {
+        try core.subscribe(tier, annual) {
             subscribeCalls++;
         } catch {}
     }

@@ -20,6 +20,7 @@ library SepehrErrors {
     error SubscriptionNotFound();
     error SubscriptionAlreadyActive();
     error InvalidTier();
+    error TitanSelfSubscribeNotAllowed();
     error InsufficientPayment(uint256 required, uint256 provided);
 
     error BelowMinimumCollateral(uint256 usdValue, uint256 minimumUsd);
