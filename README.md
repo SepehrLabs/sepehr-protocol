@@ -1,66 +1,53 @@
-## Foundry
+# AEGIS Contracts
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+Solidity smart contracts for the AEGIS liquidation protection protocol.
 
-Foundry consists of:
+## Contracts
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+| Contract | Description |
+|----------|-------------|
+| `AegisCore.sol` | Subscription management, protection config, trigger execution |
+| `AegisTimelock.sol` | Time-locked admin operations |
 
-## Documentation
+### Protocol Adapters
+Aave V3, Aave V4, Compound V2, Compound V3, Morpho Blue, Euler V2, Fluid, Curve Llamalend, Gearbox, Maker
 
-https://book.getfoundry.sh/
+### Flash Loan Providers
+Aave, Balancer, Uniswap V3
 
-## Usage
+### DEX Routers
+Uniswap V3, Uniswap V2 forks, Velodrome, Camelot, Trader Joe V2.2
 
-### Build
+## Commands
 
-```shell
-$ forge build
+```bash
+forge build              # Compile
+forge test -vv           # Run all tests
+forge fmt                # Format
+forge fmt --check        # Check formatting (CI)
 ```
 
-### Test
+## Deployment
 
-```shell
-$ forge test
+```bash
+source ../.env
+forge script script/DeployCore.s.sol \
+  --rpc-url $RPC_ETHEREUM_PRIMARY_HTTP \
+  --broadcast --verify
 ```
 
-### Format
+## Test Structure
 
-```shell
-$ forge fmt
 ```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
+test/
+├── unit/           # Unit tests with mock contracts
+│   ├── AegisCore.Admin.t.sol
+│   ├── AegisCore.Subscriptions.t.sol
+│   ├── AegisCore.Triggers.t.sol
+│   ├── adapters/   # Per-adapter unit tests
+│   ├── dex/        # DEX router tests
+│   ├── flash/      # Flash provider tests
+│   └── libraries/  # Math library tests
+├── fork/           # Fork tests against mainnet protocols
+└── invariant/      # Invariant/fuzz testing
 ```
