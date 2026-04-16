@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {BalancerFlashLoanProvider} from "../../../src/flash/BalancerFlashLoanProvider.sol";
-import {AegisErrors} from "../../../src/libraries/AegisErrors.sol";
+import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockBalancerFeesCollector, MockBalancerVault} from "../../helpers/MockBalancerVault.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {SimpleCallback} from "../../helpers/SimpleCallback.sol";
@@ -35,7 +35,7 @@ contract BalancerFlashLoanProviderTest is Test {
     }
 
     function test_constructor_revertsOnZeroAddress() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new BalancerFlashLoanProvider(address(0));
     }
 
@@ -51,12 +51,12 @@ contract BalancerFlashLoanProviderTest is Test {
     }
 
     function test_flashBorrow_revertsOnZeroCallback() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         provider.flashBorrow(address(token), BORROW_AMOUNT, address(0), "");
     }
 
     function test_flashBorrow_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         provider.flashBorrow(address(token), 0, address(callback), "");
     }
 
@@ -81,7 +81,7 @@ contract BalancerFlashLoanProviderTest is Test {
         amounts[0] = BORROW_AMOUNT;
         uint256[] memory feeAmounts = new uint256[](1);
 
-        vm.expectRevert(AegisErrors.InvalidFlashLoanCallback.selector);
+        vm.expectRevert(SepehrErrors.InvalidFlashLoanCallback.selector);
         provider.receiveFlashLoan(tokens, amounts, feeAmounts, "");
     }
 
@@ -93,7 +93,7 @@ contract BalancerFlashLoanProviderTest is Test {
         uint256[] memory feeAmounts = new uint256[](1);
 
         vm.prank(address(vault));
-        vm.expectRevert(AegisErrors.InvalidFlashLoanCallback.selector);
+        vm.expectRevert(SepehrErrors.InvalidFlashLoanCallback.selector);
         provider.receiveFlashLoan(tokens, amounts, feeAmounts, "");
     }
 

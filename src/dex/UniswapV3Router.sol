@@ -5,7 +5,7 @@ import {IDexRouter} from "../interfaces/IDexRouter.sol";
 import {ISwapRouter} from "../interfaces/external/ISwapRouter.sol";
 import {IUniswapV3Factory} from "../interfaces/external/IUniswapV3Factory.sol";
 import {IUniswapV3Pool} from "../interfaces/external/IUniswapV3Pool.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -25,7 +25,7 @@ contract UniswapV3Router is IDexRouter {
         address factory,
         uint24 defaultFee
     ) {
-        if (swapRouter == address(0) || factory == address(0)) revert AegisErrors.ZeroAddress();
+        if (swapRouter == address(0) || factory == address(0)) revert SepehrErrors.ZeroAddress();
         SWAP_ROUTER = ISwapRouter(swapRouter);
         FACTORY = IUniswapV3Factory(factory);
         DEFAULT_FEE = defaultFee;
@@ -39,7 +39,7 @@ contract UniswapV3Router is IDexRouter {
         uint256 minAmountOut,
         bytes calldata routeData
     ) external override returns (uint256 amountOut) {
-        if (amountIn == 0) revert AegisErrors.ZeroAmount();
+        if (amountIn == 0) revert SepehrErrors.ZeroAmount();
 
         uint24 fee = routeData.length > 0 ? abi.decode(routeData, (uint24)) : DEFAULT_FEE;
 

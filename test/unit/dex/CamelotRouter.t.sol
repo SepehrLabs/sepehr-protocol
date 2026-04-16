@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {CamelotRouter} from "../../../src/dex/CamelotRouter.sol";
-import {AegisErrors} from "../../../src/libraries/AegisErrors.sol";
+import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockCamelotExtRouter} from "../../helpers/MockCamelotExtRouter.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {Test} from "forge-std/Test.sol";
@@ -31,7 +31,7 @@ contract CamelotRouterTest is Test {
     }
 
     function test_constructor_revertsOnZeroRouter() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new CamelotRouter(address(0), REFERRER);
     }
 
@@ -57,7 +57,7 @@ contract CamelotRouterTest is Test {
     }
 
     function test_swap_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         router.swap(address(tokenIn), address(tokenOut), 0, 0, "");
     }
 

@@ -3,8 +3,8 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 
-import {AegisCore} from "../../src/AegisCore.sol";
-import {IAegisCore} from "../../src/interfaces/IAegisCore.sol";
+import {SepehrCore} from "../../src/SepehrCore.sol";
+import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockDex} from "../../src/mocks/MockDex.sol";
 import {MockFlashLoan} from "../../src/mocks/MockFlashLoan.sol";
@@ -30,8 +30,8 @@ contract InvariantERC20 is ERC20 {
     }
 }
 
-contract AegisCoreHandler is Test {
-    AegisCore public core;
+contract SepehrCoreHandler is Test {
+    SepehrCore public core;
     InvariantERC20 public usdc;
     InvariantERC20 public weth;
     MockAdapter public adapter;
@@ -51,7 +51,7 @@ contract AegisCoreHandler is Test {
     uint256 public executeReverts;
 
     constructor(
-        AegisCore _core,
+        SepehrCore _core,
         InvariantERC20 _usdc,
         InvariantERC20 _weth,
         MockAdapter _adapter,
@@ -90,7 +90,7 @@ contract AegisCoreHandler is Test {
         address actor = _getActor(actorSeed);
         tier = uint8(bound(tier, 1, 4));
 
-        IAegisCore.Subscription memory sub = core.getSubscription(actor);
+        ISepehrCore.Subscription memory sub = core.getSubscription(actor);
         if (sub.expiresAt > block.timestamp) return;
 
         vm.prank(actor);
@@ -104,7 +104,7 @@ contract AegisCoreHandler is Test {
     ) external {
         address actor = _getActor(actorSeed);
 
-        IAegisCore.Subscription memory sub = core.getSubscription(actor);
+        ISepehrCore.Subscription memory sub = core.getSubscription(actor);
         if (sub.tier == 0) return;
 
         vm.prank(actor);
@@ -124,10 +124,10 @@ contract AegisCoreHandler is Test {
         slippageBps = bound(slippageBps, 0, 2000);
         repayBps = bound(repayBps, 1, 5000);
 
-        IAegisCore.Subscription memory sub = core.getSubscription(actor);
+        ISepehrCore.Subscription memory sub = core.getSubscription(actor);
         if (sub.tier == 0 || sub.expiresAt <= block.timestamp) return;
 
-        IAegisCore.PositionProtection memory prot = core.getProtection(actor, PROTOCOL_KEY);
+        ISepehrCore.PositionProtection memory prot = core.getProtection(actor, PROTOCOL_KEY);
         if (prot.enabled) return;
 
         adapter.setDelegation(actor, true);
@@ -143,7 +143,7 @@ contract AegisCoreHandler is Test {
     ) external {
         address actor = _getActor(actorSeed);
 
-        IAegisCore.PositionProtection memory prot = core.getProtection(actor, PROTOCOL_KEY);
+        ISepehrCore.PositionProtection memory prot = core.getProtection(actor, PROTOCOL_KEY);
         if (!prot.enabled) return;
 
         vm.prank(actor);

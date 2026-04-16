@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {IProtocolAdapter} from "../interfaces/IProtocolAdapter.sol";
 import {IBotList, ICreditFacade, ICreditManager} from "../interfaces/external/IGearbox.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -26,8 +26,8 @@ contract GearboxAdapter is IProtocolAdapter {
         address creditManager,
         address botList
     ) {
-        if (creditManager == address(0)) revert AegisErrors.ZeroAddress();
-        if (botList == address(0)) revert AegisErrors.ZeroAddress();
+        if (creditManager == address(0)) revert SepehrErrors.ZeroAddress();
+        if (botList == address(0)) revert SepehrErrors.ZeroAddress();
         CREDIT_MANAGER = ICreditManager(creditManager);
         BOT_LIST = IBotList(botList);
     }
@@ -60,9 +60,9 @@ contract GearboxAdapter is IProtocolAdapter {
         address debtAsset,
         uint256 amount
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
         address creditAccount = CREDIT_MANAGER.creditAccounts(user);
-        if (creditAccount == address(0)) revert AegisErrors.ZeroAddress();
+        if (creditAccount == address(0)) revert SepehrErrors.ZeroAddress();
         // Transfer debt tokens to the credit account, then call botMulticall to decrease debt.
         IERC20(debtAsset).safeTransfer(creditAccount, amount);
         address facade = CREDIT_MANAGER.creditFacade();
@@ -79,10 +79,10 @@ contract GearboxAdapter is IProtocolAdapter {
         uint256 amount,
         address recipient
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
-        if (recipient == address(0)) revert AegisErrors.ZeroAddress();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
+        if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         address creditAccount = CREDIT_MANAGER.creditAccounts(user);
-        if (creditAccount == address(0)) revert AegisErrors.ZeroAddress();
+        if (creditAccount == address(0)) revert SepehrErrors.ZeroAddress();
         address facade = CREDIT_MANAGER.creditFacade();
         bytes[] memory calls = new bytes[](1);
         // Encode withdrawCollateral(address,uint256,address) selector.

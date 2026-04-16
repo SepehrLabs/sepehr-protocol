@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {AaveFlashLoanProvider} from "../../../src/flash/AaveFlashLoanProvider.sol";
-import {AegisErrors} from "../../../src/libraries/AegisErrors.sol";
+import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockAavePool} from "../../helpers/MockAavePool.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {SimpleCallback} from "../../helpers/SimpleCallback.sol";
@@ -33,7 +33,7 @@ contract AaveFlashLoanProviderTest is Test {
     }
 
     function test_constructor_revertsOnZeroAddress() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new AaveFlashLoanProvider(address(0));
     }
 
@@ -52,12 +52,12 @@ contract AaveFlashLoanProviderTest is Test {
     }
 
     function test_flashBorrow_revertsOnZeroCallback() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         provider.flashBorrow(address(token), BORROW_AMOUNT, address(0), "");
     }
 
     function test_flashBorrow_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         provider.flashBorrow(address(token), 0, address(callback), "");
     }
 
@@ -81,19 +81,19 @@ contract AaveFlashLoanProviderTest is Test {
     // ── executeOperation ─────────────────────────────────────────────────
 
     function test_executeOperation_revertsIfCallerNotPool() public {
-        vm.expectRevert(AegisErrors.InvalidFlashLoanCallback.selector);
+        vm.expectRevert(SepehrErrors.InvalidFlashLoanCallback.selector);
         provider.executeOperation(address(token), BORROW_AMOUNT, 0, address(provider), "");
     }
 
     function test_executeOperation_revertsIfInitiatorNotSelf() public {
         vm.prank(address(pool));
-        vm.expectRevert(AegisErrors.InvalidFlashLoanCallback.selector);
+        vm.expectRevert(SepehrErrors.InvalidFlashLoanCallback.selector);
         provider.executeOperation(address(token), BORROW_AMOUNT, 0, address(0xdead), "");
     }
 
     function test_executeOperation_revertsIfNoActiveLoan() public {
         vm.prank(address(pool));
-        vm.expectRevert(AegisErrors.InvalidFlashLoanCallback.selector);
+        vm.expectRevert(SepehrErrors.InvalidFlashLoanCallback.selector);
         provider.executeOperation(address(token), BORROW_AMOUNT, 0, address(provider), "");
     }
 

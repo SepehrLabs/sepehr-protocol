@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {IProtocolAdapter} from "../interfaces/IProtocolAdapter.sol";
 import {IFluidVault} from "../interfaces/external/IFluidVault.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -18,7 +18,7 @@ contract FluidAdapter is IProtocolAdapter {
     constructor(
         address vault
     ) {
-        if (vault == address(0)) revert AegisErrors.ZeroAddress();
+        if (vault == address(0)) revert SepehrErrors.ZeroAddress();
         VAULT = IFluidVault(vault);
     }
 
@@ -42,7 +42,7 @@ contract FluidAdapter is IProtocolAdapter {
         address debtAsset,
         uint256 amount
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(VAULT), amount);
         VAULT.repay(user, amount);
     }
@@ -54,8 +54,8 @@ contract FluidAdapter is IProtocolAdapter {
         uint256 amount,
         address recipient
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
-        if (recipient == address(0)) revert AegisErrors.ZeroAddress();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
+        if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         // Adapter must be authorized via isAuth for the user's vault position.
         // The vault sends collateral directly to the recipient.
         VAULT.withdraw(amount, recipient);

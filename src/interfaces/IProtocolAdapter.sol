@@ -12,10 +12,10 @@ interface IProtocolAdapter {
         address user
     ) external view returns (uint256 healthFactor);
 
-    /// @notice Check whether the user has granted AEGIS the required authorization
+    /// @notice Check whether the user has granted Sepehr the required authorization
     ///         for this protocol (aToken approval, Comet.allow, Morpho.setAuthorization, etc.).
     /// @param user The user to check.
-    /// @return delegated True if AEGIS can act on the user's position.
+    /// @return delegated True if Sepehr can act on the user's position.
     function checkDelegation(
         address user
     ) external view returns (bool delegated);

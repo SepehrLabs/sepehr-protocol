@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {IProtocolAdapter} from "../interfaces/IProtocolAdapter.sol";
 import {ICurveController} from "../interfaces/external/ICurveLlamma.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -20,8 +20,8 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
         address controller,
         address priceOracle
     ) {
-        if (controller == address(0)) revert AegisErrors.ZeroAddress();
-        if (priceOracle == address(0)) revert AegisErrors.ZeroAddress();
+        if (controller == address(0)) revert SepehrErrors.ZeroAddress();
+        if (priceOracle == address(0)) revert SepehrErrors.ZeroAddress();
         CONTROLLER = ICurveController(controller);
         PRICE_ORACLE = priceOracle;
     }
@@ -53,7 +53,7 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
         address debtAsset,
         uint256 amount
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(CONTROLLER), amount);
         CONTROLLER.repay(amount, user);
     }
@@ -65,8 +65,8 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
         uint256 amount,
         address recipient
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
-        if (recipient == address(0)) revert AegisErrors.ZeroAddress();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
+        if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         // remove_collateral is owner-only in Curve. The adapter calls it, and the
         // controller checks that msg.sender owns the position or is authorized.
         CONTROLLER.remove_collateral(amount);

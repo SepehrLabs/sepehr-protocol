@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {UniswapV3Router} from "../../../src/dex/UniswapV3Router.sol";
-import {AegisErrors} from "../../../src/libraries/AegisErrors.sol";
+import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {MockUniswapV3Pool} from "../../helpers/MockUniswapV3Pool.sol";
 import {MockV3Factory} from "../../helpers/MockV3Factory.sol";
@@ -41,12 +41,12 @@ contract UniswapV3RouterTest is Test {
     }
 
     function test_constructor_revertsOnZeroSwapRouter() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new UniswapV3Router(address(0), address(factory), DEFAULT_FEE);
     }
 
     function test_constructor_revertsOnZeroFactory() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new UniswapV3Router(address(swapRouter), address(0), DEFAULT_FEE);
     }
 
@@ -70,7 +70,7 @@ contract UniswapV3RouterTest is Test {
     }
 
     function test_swap_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         router.swap(address(tokenIn), address(tokenOut), 0, 0, "");
     }
 

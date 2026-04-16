@@ -4,13 +4,13 @@ pragma solidity ^0.8.28;
 import {AaveFlashLoanProvider} from "../../src/flash/AaveFlashLoanProvider.sol";
 import {BalancerFlashLoanProvider} from "../../src/flash/BalancerFlashLoanProvider.sol";
 import {UniswapV3FlashLoanProvider} from "../../src/flash/UniswapV3FlashLoanProvider.sol";
-import {IAegisCallback} from "../../src/interfaces/IAegisCallback.sol";
+import {ISepehrCallback} from "../../src/interfaces/ISepehrCallback.sol";
 import {IFlashLoanProvider} from "../../src/interfaces/IFlashLoanProvider.sol";
 import {ForkTestBase} from "./ForkTestBase.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @notice Simple flash-loan callback that repays principal + fee back to the provider.
-contract FlashLoanRepayer is IAegisCallback {
+contract FlashLoanRepayer is ISepehrCallback {
     address public lastAsset;
     uint256 public lastAmount;
     uint256 public lastFee;

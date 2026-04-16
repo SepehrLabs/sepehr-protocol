@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {UniswapV3FlashLoanProvider} from "../../../src/flash/UniswapV3FlashLoanProvider.sol";
-import {AegisErrors} from "../../../src/libraries/AegisErrors.sol";
+import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {MockUniswapV3Pool} from "../../helpers/MockUniswapV3Pool.sol";
 import {SimpleCallback} from "../../helpers/SimpleCallback.sol";
@@ -40,7 +40,7 @@ contract UniswapV3FlashLoanProviderTest is Test {
     }
 
     function test_constructor_revertsOnZeroAddress() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new UniswapV3FlashLoanProvider(address(0));
     }
 
@@ -76,17 +76,17 @@ contract UniswapV3FlashLoanProviderTest is Test {
     // ── flashBorrow unsupported ──────────────────────────────────────────
 
     function test_flashBorrow_revertsOnUnsupportedAsset() public {
-        vm.expectRevert(AegisErrors.NoFlashLoanAvailable.selector);
+        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         provider.flashBorrow(address(tokenC), BORROW_AMOUNT, address(callback), "");
     }
 
     function test_flashBorrow_revertsOnZeroCallback() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         provider.flashBorrow(address(tokenA), BORROW_AMOUNT, address(0), "");
     }
 
     function test_flashBorrow_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         provider.flashBorrow(address(tokenA), 0, address(callback), "");
     }
 
@@ -108,13 +108,13 @@ contract UniswapV3FlashLoanProviderTest is Test {
     // ── uniswapV3FlashCallback ───────────────────────────────────────────
 
     function test_uniswapV3FlashCallback_revertsIfCallerNotPool() public {
-        vm.expectRevert(AegisErrors.InvalidFlashLoanCallback.selector);
+        vm.expectRevert(SepehrErrors.InvalidFlashLoanCallback.selector);
         provider.uniswapV3FlashCallback(0, 0, "");
     }
 
     function test_uniswapV3FlashCallback_revertsIfNoActiveLoan() public {
         vm.prank(address(pool));
-        vm.expectRevert(AegisErrors.InvalidFlashLoanCallback.selector);
+        vm.expectRevert(SepehrErrors.InvalidFlashLoanCallback.selector);
         provider.uniswapV3FlashCallback(0, 0, "");
     }
 

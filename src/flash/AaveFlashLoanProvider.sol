@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-import {IAegisCallback} from "../interfaces/IAegisCallback.sol";
+import {ISepehrCallback} from "../interfaces/ISepehrCallback.sol";
 import {IFlashLoanProvider} from "../interfaces/IFlashLoanProvider.sol";
 import {IAavePool} from "../interfaces/external/IAavePool.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -21,7 +21,7 @@ contract AaveFlashLoanProvider is IFlashLoanProvider {
     constructor(
         address pool
     ) {
-        if (pool == address(0)) revert AegisErrors.ZeroAddress();
+        if (pool == address(0)) revert SepehrErrors.ZeroAddress();
         POOL = IAavePool(pool);
     }
 
@@ -32,8 +32,8 @@ contract AaveFlashLoanProvider is IFlashLoanProvider {
         address callback,
         bytes calldata data
     ) external override {
-        if (callback == address(0)) revert AegisErrors.ZeroAddress();
-        if (amount == 0) revert AegisErrors.ZeroAmount();
+        if (callback == address(0)) revert SepehrErrors.ZeroAddress();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
 
         _activeCallback = callback;
         _activeData = data;
@@ -56,12 +56,12 @@ contract AaveFlashLoanProvider is IFlashLoanProvider {
         address initiator,
         bytes calldata
     ) external returns (bool) {
-        if (msg.sender != address(POOL)) revert AegisErrors.InvalidFlashLoanCallback();
-        if (initiator != address(this)) revert AegisErrors.InvalidFlashLoanCallback();
-        if (_activeCallback == address(0)) revert AegisErrors.InvalidFlashLoanCallback();
+        if (msg.sender != address(POOL)) revert SepehrErrors.InvalidFlashLoanCallback();
+        if (initiator != address(this)) revert SepehrErrors.InvalidFlashLoanCallback();
+        if (_activeCallback == address(0)) revert SepehrErrors.InvalidFlashLoanCallback();
 
         IERC20(asset).safeTransfer(_activeCallback, amount);
-        IAegisCallback(_activeCallback).onFlashLoan(asset, amount, premium, _activeData);
+        ISepehrCallback(_activeCallback).onFlashLoan(asset, amount, premium, _activeData);
 
         IERC20(asset).forceApprove(address(POOL), amount + premium);
         return true;

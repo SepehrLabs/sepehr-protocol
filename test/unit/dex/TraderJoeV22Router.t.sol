@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {TraderJoeV22Router} from "../../../src/dex/TraderJoeV22Router.sol";
-import {AegisErrors} from "../../../src/libraries/AegisErrors.sol";
+import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {MockLBFactory, MockLBPair, MockLBRouter} from "../../helpers/MockLBRouter.sol";
 import {Test} from "forge-std/Test.sol";
@@ -37,12 +37,12 @@ contract TraderJoeV22RouterTest is Test {
     }
 
     function test_constructor_revertsOnZeroRouter() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new TraderJoeV22Router(address(0), address(factory), DEFAULT_BIN_STEP);
     }
 
     function test_constructor_revertsOnZeroFactory() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new TraderJoeV22Router(address(externalRouter), address(0), DEFAULT_BIN_STEP);
     }
 
@@ -63,7 +63,7 @@ contract TraderJoeV22RouterTest is Test {
     }
 
     function test_swap_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         router.swap(address(tokenIn), address(tokenOut), 0, 0, "");
     }
 

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-import {IAegisCallback} from "../interfaces/IAegisCallback.sol";
+import {ISepehrCallback} from "../interfaces/ISepehrCallback.sol";
 import {IFlashLoanProvider} from "../interfaces/IFlashLoanProvider.sol";
 import {IBalancerFeesCollector, IBalancerVault} from "../interfaces/external/IBalancerVault.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -21,7 +21,7 @@ contract BalancerFlashLoanProvider is IFlashLoanProvider {
     constructor(
         address vault
     ) {
-        if (vault == address(0)) revert AegisErrors.ZeroAddress();
+        if (vault == address(0)) revert SepehrErrors.ZeroAddress();
         VAULT = IBalancerVault(vault);
     }
 
@@ -32,8 +32,8 @@ contract BalancerFlashLoanProvider is IFlashLoanProvider {
         address callback,
         bytes calldata data
     ) external override {
-        if (callback == address(0)) revert AegisErrors.ZeroAddress();
-        if (amount == 0) revert AegisErrors.ZeroAmount();
+        if (callback == address(0)) revert SepehrErrors.ZeroAddress();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
 
         _activeCallback = callback;
         _activeData = data;
@@ -59,15 +59,15 @@ contract BalancerFlashLoanProvider is IFlashLoanProvider {
         uint256[] memory feeAmounts,
         bytes memory
     ) external {
-        if (msg.sender != address(VAULT)) revert AegisErrors.InvalidFlashLoanCallback();
-        if (_activeCallback == address(0)) revert AegisErrors.InvalidFlashLoanCallback();
+        if (msg.sender != address(VAULT)) revert SepehrErrors.InvalidFlashLoanCallback();
+        if (_activeCallback == address(0)) revert SepehrErrors.InvalidFlashLoanCallback();
 
         address asset = tokens[0];
         uint256 amount = amounts[0];
         uint256 fee = feeAmounts[0];
 
         IERC20(asset).safeTransfer(_activeCallback, amount);
-        IAegisCallback(_activeCallback).onFlashLoan(asset, amount, fee, _activeData);
+        ISepehrCallback(_activeCallback).onFlashLoan(asset, amount, fee, _activeData);
 
         IERC20(asset).safeTransfer(address(VAULT), amount + fee);
     }

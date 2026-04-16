@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-/// @title IAegisCore
-/// @notice Public interface for the AegisCore contract.
-interface IAegisCore {
+/// @title ISepehrCore
+/// @notice Public interface for the SepehrCore contract.
+interface ISepehrCore {
     // ─── Structs ─────────────────────────────────────────────────
 
     struct Subscription {
@@ -21,7 +21,7 @@ interface IAegisCore {
 
     // ─── User Actions ────────────────────────────────────────────
 
-    /// @notice Subscribe to AEGIS protection.
+    /// @notice Subscribe to Sepehr protection.
     /// @param tier The subscription tier (1-4).
     /// @param paymentToken The token to pay with (USDC or WETH).
     function subscribe(
@@ -38,7 +38,7 @@ interface IAegisCore {
     /// @notice Cancel the subscription. Remaining time is forfeited.
     function unsubscribe() external;
 
-    /// @notice Enable AEGIS protection on a specific protocol position.
+    /// @notice Enable Sepehr protection on a specific protocol position.
     /// @param protocolKey The keccak256 key identifying the protocol.
     /// @param thresholdHF The health-factor threshold that triggers protection (WAD).
     /// @param maxSlippageBps Maximum acceptable slippage in basis points.
@@ -50,7 +50,7 @@ interface IAegisCore {
         uint256 repayPercentBps
     ) external;
 
-    /// @notice Disable AEGIS protection on a specific protocol position.
+    /// @notice Disable Sepehr protection on a specific protocol position.
     /// @param protocolKey The protocol key.
     function disableProtection(
         bytes32 protocolKey

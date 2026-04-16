@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {IProtocolAdapter} from "../interfaces/IProtocolAdapter.sol";
 import {ICToken, ICompoundOracle, IComptroller} from "../interfaces/external/ICToken.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -20,8 +20,8 @@ contract CompoundV2Adapter is IProtocolAdapter {
         address comptroller,
         address cToken
     ) {
-        if (comptroller == address(0)) revert AegisErrors.ZeroAddress();
-        if (cToken == address(0)) revert AegisErrors.ZeroAddress();
+        if (comptroller == address(0)) revert SepehrErrors.ZeroAddress();
+        if (cToken == address(0)) revert SepehrErrors.ZeroAddress();
         COMPTROLLER = IComptroller(comptroller);
         CTOKEN = ICToken(cToken);
     }
@@ -49,7 +49,7 @@ contract CompoundV2Adapter is IProtocolAdapter {
         address debtAsset,
         uint256 amount
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(CTOKEN), amount);
         CTOKEN.repayBorrowBehalf(user, amount);
     }
@@ -61,8 +61,8 @@ contract CompoundV2Adapter is IProtocolAdapter {
         uint256 amount,
         address recipient
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
-        if (recipient == address(0)) revert AegisErrors.ZeroAddress();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
+        if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
 
         uint256 exchangeRate = CTOKEN.exchangeRateCurrent();
         uint256 cTokenAmount = (amount * 1e18 + exchangeRate - 1) / exchangeRate;

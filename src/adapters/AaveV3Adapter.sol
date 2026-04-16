@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {IProtocolAdapter} from "../interfaces/IProtocolAdapter.sol";
 import {IAavePool} from "../interfaces/external/IAavePool.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -20,8 +20,8 @@ contract AaveV3Adapter is IProtocolAdapter {
         address pool,
         address aToken
     ) {
-        if (pool == address(0)) revert AegisErrors.ZeroAddress();
-        if (aToken == address(0)) revert AegisErrors.ZeroAddress();
+        if (pool == address(0)) revert SepehrErrors.ZeroAddress();
+        if (aToken == address(0)) revert SepehrErrors.ZeroAddress();
         POOL = IAavePool(pool);
         ATOKEN = aToken;
     }
@@ -46,7 +46,7 @@ contract AaveV3Adapter is IProtocolAdapter {
         address debtAsset,
         uint256 amount
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(POOL), amount);
         POOL.repay(debtAsset, amount, 2, user);
     }
@@ -58,8 +58,8 @@ contract AaveV3Adapter is IProtocolAdapter {
         uint256 amount,
         address recipient
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
-        if (recipient == address(0)) revert AegisErrors.ZeroAddress();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
+        if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         IERC20(ATOKEN).safeTransferFrom(user, address(this), amount);
         POOL.withdraw(collateralAsset, amount, recipient);
     }

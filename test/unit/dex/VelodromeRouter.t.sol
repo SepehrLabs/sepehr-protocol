@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {VelodromeRouter} from "../../../src/dex/VelodromeRouter.sol";
-import {AegisErrors} from "../../../src/libraries/AegisErrors.sol";
+import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {MockVeloRouter} from "../../helpers/MockVeloRouter.sol";
 import {Test} from "forge-std/Test.sol";
@@ -32,12 +32,12 @@ contract VelodromeRouterTest is Test {
     }
 
     function test_constructor_revertsOnZeroRouter() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new VelodromeRouter(address(0), POOL_FACTORY, false);
     }
 
     function test_constructor_revertsOnZeroFactory() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new VelodromeRouter(address(externalRouter), address(0), false);
     }
 
@@ -58,7 +58,7 @@ contract VelodromeRouterTest is Test {
     }
 
     function test_swap_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         router.swap(address(tokenIn), address(tokenOut), 0, 0, "");
     }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-import {IAegisCallback} from "../interfaces/IAegisCallback.sol";
+import {ISepehrCallback} from "../interfaces/ISepehrCallback.sol";
 import {IFlashLoanProvider} from "../interfaces/IFlashLoanProvider.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -32,7 +32,7 @@ contract MockFlashLoan is IFlashLoanProvider {
         IERC20(asset).transfer(callback, amount);
 
         uint256 fee = (amount * feeBps) / 10_000;
-        IAegisCallback(callback).onFlashLoan(asset, amount, fee, data);
+        ISepehrCallback(callback).onFlashLoan(asset, amount, fee, data);
 
         uint256 repayment = amount + fee;
         uint256 balance = IERC20(asset).balanceOf(address(this));

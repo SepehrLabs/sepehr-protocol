@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {GearboxAdapter} from "../../../src/adapters/GearboxAdapter.sol";
-import {AegisErrors} from "../../../src/libraries/AegisErrors.sol";
+import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {MockBotList, MockCreditFacade, MockCreditManager} from "../../helpers/MockGearbox.sol";
 import {Test} from "forge-std/Test.sol";
@@ -34,12 +34,12 @@ contract GearboxAdapterTest is Test {
     // ─── Constructor ───────────────────────────────────────────────────
 
     function test_constructor_revertsOnZeroCreditManager() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new GearboxAdapter(address(0), address(botList));
     }
 
     function test_constructor_revertsOnZeroBotList() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new GearboxAdapter(address(creditManager), address(0));
     }
 
@@ -131,12 +131,12 @@ contract GearboxAdapterTest is Test {
     // ─── repay ─────────────────────────────────────────────────────────
 
     function test_repay_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.repay(user, address(debtToken), 0);
     }
 
     function test_repay_revertsWhenNoCreditAccount() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.repay(user, address(debtToken), 100e18);
     }
 
@@ -165,17 +165,17 @@ contract GearboxAdapterTest is Test {
     // ─── withdrawCollateral ────────────────────────────────────────────
 
     function test_withdrawCollateral_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 0, recipient);
     }
 
     function test_withdrawCollateral_revertsOnZeroRecipient() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 1e18, address(0));
     }
 
     function test_withdrawCollateral_revertsWhenNoCreditAccount() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 1e18, recipient);
     }
 

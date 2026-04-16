@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {UniV2ForkRouter} from "../../../src/dex/UniV2ForkRouter.sol";
-import {AegisErrors} from "../../../src/libraries/AegisErrors.sol";
+import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {MockV2Router} from "../../helpers/MockV2Router.sol";
 import {Test} from "forge-std/Test.sol";
@@ -29,7 +29,7 @@ contract UniV2ForkRouterTest is Test {
     }
 
     function test_constructor_revertsOnZeroAddress() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new UniV2ForkRouter(address(0));
     }
 
@@ -43,7 +43,7 @@ contract UniV2ForkRouterTest is Test {
     }
 
     function test_swap_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         router.swap(address(tokenIn), address(tokenOut), 0, 0, "");
     }
 

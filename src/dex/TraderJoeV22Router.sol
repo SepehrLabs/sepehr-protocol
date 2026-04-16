@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {IDexRouter} from "../interfaces/IDexRouter.sol";
 import {ILBFactory, ILBPair, ILBRouter} from "../interfaces/external/ILBRouter.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -22,7 +22,7 @@ contract TraderJoeV22Router is IDexRouter {
         address factory,
         uint256 defaultBinStep
     ) {
-        if (router == address(0) || factory == address(0)) revert AegisErrors.ZeroAddress();
+        if (router == address(0) || factory == address(0)) revert SepehrErrors.ZeroAddress();
         ROUTER = ILBRouter(router);
         LB_FACTORY = ILBFactory(factory);
         DEFAULT_BIN_STEP = defaultBinStep;
@@ -36,7 +36,7 @@ contract TraderJoeV22Router is IDexRouter {
         uint256 minAmountOut,
         bytes calldata routeData
     ) external override returns (uint256 amountOut) {
-        if (amountIn == 0) revert AegisErrors.ZeroAmount();
+        if (amountIn == 0) revert SepehrErrors.ZeroAmount();
 
         uint256 binStep = routeData.length > 0 ? abi.decode(routeData, (uint256)) : DEFAULT_BIN_STEP;
 

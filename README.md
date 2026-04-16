@@ -1,13 +1,13 @@
-# AEGIS Contracts
+# Sepehr Contracts
 
-Solidity smart contracts for the AEGIS liquidation protection protocol.
+Solidity smart contracts for the Sepehr liquidation protection protocol.
 
 ## Contracts
 
 | Contract | Description |
 |----------|-------------|
-| `AegisCore.sol` | Subscription management, protection config, trigger execution |
-| `AegisTimelock.sol` | Time-locked admin operations |
+| `SepehrCore.sol` | Subscription management, protection config, trigger execution |
+| `SepehrTimelock.sol` | Time-locked admin operations |
 
 ### Protocol Adapters
 Aave V3, Aave V4, Compound V2, Compound V3, Morpho Blue, Euler V2, Fluid, Curve Llamalend, Gearbox, Maker
@@ -41,9 +41,9 @@ forge script script/DeployCore.s.sol \
 ```
 test/
 ├── unit/           # Unit tests with mock contracts
-│   ├── AegisCore.Admin.t.sol
-│   ├── AegisCore.Subscriptions.t.sol
-│   ├── AegisCore.Triggers.t.sol
+│   ├── SepehrCore.Admin.t.sol
+│   ├── SepehrCore.Subscriptions.t.sol
+│   ├── SepehrCore.Triggers.t.sol
 │   ├── adapters/   # Per-adapter unit tests
 │   ├── dex/        # DEX router tests
 │   ├── flash/      # Flash provider tests

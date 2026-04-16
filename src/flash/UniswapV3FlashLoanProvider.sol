@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-import {IAegisCallback} from "../interfaces/IAegisCallback.sol";
+import {ISepehrCallback} from "../interfaces/ISepehrCallback.sol";
 import {IFlashLoanProvider} from "../interfaces/IFlashLoanProvider.sol";
 import {IUniswapV3Pool} from "../interfaces/external/IUniswapV3Pool.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -24,7 +24,7 @@ contract UniswapV3FlashLoanProvider is IFlashLoanProvider {
     constructor(
         address pool
     ) {
-        if (pool == address(0)) revert AegisErrors.ZeroAddress();
+        if (pool == address(0)) revert SepehrErrors.ZeroAddress();
         POOL = IUniswapV3Pool(pool);
     }
 
@@ -35,14 +35,14 @@ contract UniswapV3FlashLoanProvider is IFlashLoanProvider {
         address callback,
         bytes calldata data
     ) external override {
-        if (callback == address(0)) revert AegisErrors.ZeroAddress();
-        if (amount == 0) revert AegisErrors.ZeroAmount();
+        if (callback == address(0)) revert SepehrErrors.ZeroAddress();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
 
         address t0 = POOL.token0();
         address t1 = POOL.token1();
         bool isToken0 = asset == t0;
         bool isToken1 = asset == t1;
-        if (!isToken0 && !isToken1) revert AegisErrors.NoFlashLoanAvailable();
+        if (!isToken0 && !isToken1) revert SepehrErrors.NoFlashLoanAvailable();
 
         _activeCallback = callback;
         _activeAsset = asset;
@@ -67,15 +67,15 @@ contract UniswapV3FlashLoanProvider is IFlashLoanProvider {
         uint256 fee1,
         bytes calldata
     ) external {
-        if (msg.sender != address(POOL)) revert AegisErrors.InvalidFlashLoanCallback();
-        if (_activeCallback == address(0)) revert AegisErrors.InvalidFlashLoanCallback();
+        if (msg.sender != address(POOL)) revert SepehrErrors.InvalidFlashLoanCallback();
+        if (_activeCallback == address(0)) revert SepehrErrors.InvalidFlashLoanCallback();
 
         address asset = _activeAsset;
         uint256 amount = _activeAmount;
         uint256 fee = asset == POOL.token0() ? fee0 : fee1;
 
         IERC20(asset).safeTransfer(_activeCallback, amount);
-        IAegisCallback(_activeCallback).onFlashLoan(asset, amount, fee, _activeData);
+        ISepehrCallback(_activeCallback).onFlashLoan(asset, amount, fee, _activeData);
 
         IERC20(asset).safeTransfer(address(POOL), amount + fee);
     }

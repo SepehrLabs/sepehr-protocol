@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {CompoundV2Adapter} from "../../../src/adapters/CompoundV2Adapter.sol";
-import {AegisErrors} from "../../../src/libraries/AegisErrors.sol";
+import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockCToken, MockCompoundOracle, MockComptroller} from "../../helpers/MockCompoundV2.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {Test} from "forge-std/Test.sol";
@@ -35,12 +35,12 @@ contract CompoundV2AdapterTest is Test {
     }
 
     function test_constructor_revertsOnZeroComptroller() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new CompoundV2Adapter(address(0), address(cToken));
     }
 
     function test_constructor_revertsOnZeroCToken() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new CompoundV2Adapter(address(comptroller), address(0));
     }
 
@@ -88,7 +88,7 @@ contract CompoundV2AdapterTest is Test {
     // ── repay ────────────────────────────────────────────────────────────
 
     function test_repay_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.repay(user, address(underlying), 0);
     }
 
@@ -115,12 +115,12 @@ contract CompoundV2AdapterTest is Test {
     // ── withdrawCollateral ───────────────────────────────────────────────
 
     function test_withdrawCollateral_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.withdrawCollateral(user, address(underlying), 0, recipient);
     }
 
     function test_withdrawCollateral_revertsOnZeroRecipient() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(underlying), 1e18, address(0));
     }
 

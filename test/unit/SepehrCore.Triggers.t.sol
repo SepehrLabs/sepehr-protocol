@@ -5,10 +5,10 @@ import {Test} from "forge-std/Test.sol";
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
-import {AegisCore} from "../../src/AegisCore.sol";
-import {IAegisCore} from "../../src/interfaces/IAegisCore.sol";
-import {AegisErrors} from "../../src/libraries/AegisErrors.sol";
-import {AegisEvents} from "../../src/libraries/AegisEvents.sol";
+import {SepehrCore} from "../../src/SepehrCore.sol";
+import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
+import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
+import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
 import {Percentages} from "../../src/libraries/Percentages.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockDex} from "../../src/mocks/MockDex.sol";
@@ -29,8 +29,8 @@ contract MockERC20 is ERC20 {
     }
 }
 
-contract AegisCoreTriggersTest is Test {
-    AegisCore public core;
+contract SepehrCoreTriggersTest is Test {
+    SepehrCore public core;
     MockOracle public oracle;
     MockAdapter public adapter;
     MockFlashLoan public flashLoan;
@@ -64,7 +64,7 @@ contract AegisCoreTriggersTest is Test {
         debtToken = new MockERC20("Debt Token", "DEBT");
         collateralToken = new MockERC20("Collateral Token", "COLL");
 
-        core = new AegisCore(address(this), timelock, guardian, address(oracle), 500e8, 30);
+        core = new SepehrCore(address(this), timelock, guardian, address(oracle), 500e8, 30);
 
         // Register adapter, keeper, flash provider, dex router via timelock
         vm.startPrank(timelock);
@@ -155,7 +155,7 @@ contract AegisCoreTriggersTest is Test {
         address[] memory providers = _buildFlashProviders();
 
         vm.expectEmit(true, true, true, false, address(core));
-        emit AegisEvents.Triggered(alice, seqKey, keeper, REPAY_AMOUNT, 0, HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD, 0);
+        emit SepehrEvents.Triggered(alice, seqKey, keeper, REPAY_AMOUNT, 0, HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD, 0);
 
         vm.prank(keeper);
         core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
@@ -178,7 +178,7 @@ contract AegisCoreTriggersTest is Test {
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(totalFee);
 
         vm.expectEmit(true, false, false, true, address(core));
-        emit AegisEvents.FeeCollected(keeper, totalFee, ownerShare, keeperShare);
+        emit SepehrEvents.FeeCollected(keeper, totalFee, ownerShare, keeperShare);
 
         vm.prank(keeper);
         core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
@@ -190,7 +190,7 @@ contract AegisCoreTriggersTest is Test {
         address notKeeper = makeAddr("notKeeper");
         address[] memory providers = _buildFlashProviders();
 
-        vm.expectRevert(AegisErrors.NotKeeper.selector);
+        vm.expectRevert(SepehrErrors.NotKeeper.selector);
         vm.prank(notKeeper);
         core.execute(
             alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
@@ -201,7 +201,7 @@ contract AegisCoreTriggersTest is Test {
         core.pause();
         address[] memory providers = _buildFlashProviders();
 
-        vm.expectRevert(AegisErrors.ContractPaused.selector);
+        vm.expectRevert(SepehrErrors.ContractPaused.selector);
         vm.prank(keeper);
         core.execute(
             alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
@@ -213,7 +213,7 @@ contract AegisCoreTriggersTest is Test {
         address[] memory providers = _buildFlashProviders();
 
         vm.expectRevert(
-            abi.encodeWithSelector(AegisErrors.HealthFactorAboveThreshold.selector, HF_ABOVE_THRESHOLD, THRESHOLD_HF)
+            abi.encodeWithSelector(SepehrErrors.HealthFactorAboveThreshold.selector, HF_ABOVE_THRESHOLD, THRESHOLD_HF)
         );
         vm.prank(keeper);
         core.execute(
@@ -243,7 +243,7 @@ contract AegisCoreTriggersTest is Test {
 
         // Try again immediately — should hit cooldown
         uint256 remaining = 3600; // COOLDOWN_SECONDS
-        vm.expectRevert(abi.encodeWithSelector(AegisErrors.CooldownActive.selector, remaining));
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.CooldownActive.selector, remaining));
         vm.prank(keeper);
         core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
     }
@@ -282,7 +282,7 @@ contract AegisCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
 
-        vm.expectRevert(AegisErrors.SubscriptionExpired.selector);
+        vm.expectRevert(SepehrErrors.SubscriptionExpired.selector);
         vm.prank(keeper);
         core.execute(
             alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
@@ -298,7 +298,7 @@ contract AegisCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
 
-        vm.expectRevert(abi.encodeWithSelector(AegisErrors.ProtectionNotEnabled.selector, alice, unknownKey));
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.ProtectionNotEnabled.selector, alice, unknownKey));
         vm.prank(keeper);
         core.execute(
             alice, unknownKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
@@ -310,7 +310,7 @@ contract AegisCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
 
-        vm.expectRevert(abi.encodeWithSelector(AegisErrors.DelegationRevoked.selector, alice, PROTOCOL_KEY));
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.DelegationRevoked.selector, alice, PROTOCOL_KEY));
         vm.prank(keeper);
         core.execute(
             alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
@@ -323,7 +323,7 @@ contract AegisCoreTriggersTest is Test {
         // Pass an empty flash providers array
         address[] memory emptyProviders = new address[](0);
 
-        vm.expectRevert(AegisErrors.NoFlashLoanAvailable.selector);
+        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         vm.prank(keeper);
         core.execute(
             alice,
@@ -345,7 +345,7 @@ contract AegisCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
 
-        vm.expectRevert(AegisErrors.NoFlashLoanAvailable.selector);
+        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         vm.prank(keeper);
         core.execute(
             alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
@@ -356,7 +356,7 @@ contract AegisCoreTriggersTest is Test {
         adapter.setHealthFactor(alice, HF_BELOW_THRESHOLD);
         address[] memory providers = _buildFlashProviders();
 
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         vm.prank(keeper);
         core.execute(alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), 0, providers, address(dex), "");
     }
@@ -366,7 +366,7 @@ contract AegisCoreTriggersTest is Test {
         address[] memory providers = _buildFlashProviders();
         address fakeDex = makeAddr("fakeDex");
 
-        vm.expectRevert(AegisErrors.NotAuthorized.selector);
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
         vm.prank(keeper);
         core.execute(
             alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, fakeDex, ""
@@ -377,7 +377,7 @@ contract AegisCoreTriggersTest is Test {
         address bob = makeAddr("bob");
         address[] memory providers = _buildFlashProviders();
 
-        vm.expectRevert(AegisErrors.SubscriptionNotFound.selector);
+        vm.expectRevert(SepehrErrors.SubscriptionNotFound.selector);
         vm.prank(keeper);
         core.execute(
             bob, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""

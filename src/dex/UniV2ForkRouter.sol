@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {IDexRouter} from "../interfaces/IDexRouter.sol";
 import {IUniswapV2Router} from "../interfaces/external/IUniswapV2Router.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -18,7 +18,7 @@ contract UniV2ForkRouter is IDexRouter {
     constructor(
         address router
     ) {
-        if (router == address(0)) revert AegisErrors.ZeroAddress();
+        if (router == address(0)) revert SepehrErrors.ZeroAddress();
         ROUTER = IUniswapV2Router(router);
     }
 
@@ -30,7 +30,7 @@ contract UniV2ForkRouter is IDexRouter {
         uint256 minAmountOut,
         bytes calldata
     ) external override returns (uint256 amountOut) {
-        if (amountIn == 0) revert AegisErrors.ZeroAmount();
+        if (amountIn == 0) revert SepehrErrors.ZeroAmount();
 
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenIn).forceApprove(address(ROUTER), amountIn);

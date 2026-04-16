@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-library AegisEvents {
+library SepehrEvents {
     // ─── Subscriptions ───────────────────────────────────────────
     event Subscribed(address indexed user, uint256 expiresAt, uint8 tier, uint256 chainId);
     event Renewed(address indexed user, uint256 newExpiresAt, uint8 tier);

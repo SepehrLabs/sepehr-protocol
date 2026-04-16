@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {MorphoBlueAdapter} from "../../../src/adapters/MorphoBlueAdapter.sol";
-import {AegisErrors} from "../../../src/libraries/AegisErrors.sol";
+import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {MockMorpho, MockMorphoOracle} from "../../helpers/MockMorpho.sol";
 import {Test} from "forge-std/Test.sol";
@@ -45,12 +45,12 @@ contract MorphoBlueAdapterTest is Test {
     }
 
     function test_constructor_revertsOnZeroMorpho() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new MorphoBlueAdapter(address(0), MARKET_ID);
     }
 
     function test_constructor_revertsOnZeroMarketId() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new MorphoBlueAdapter(address(morpho), bytes32(0));
     }
 
@@ -130,7 +130,7 @@ contract MorphoBlueAdapterTest is Test {
     // ── repay ────────────────────────────────────────────────────────────
 
     function test_repay_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.repay(user, address(loanToken), 0);
     }
 
@@ -160,12 +160,12 @@ contract MorphoBlueAdapterTest is Test {
     // ── withdrawCollateral ───────────────────────────────────────────────
 
     function test_withdrawCollateral_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 0, recipient);
     }
 
     function test_withdrawCollateral_revertsOnZeroRecipient() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 1e18, address(0));
     }
 

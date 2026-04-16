@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {CurveLlamalendAdapter} from "../../../src/adapters/CurveLlamalendAdapter.sol";
-import {AegisErrors} from "../../../src/libraries/AegisErrors.sol";
+import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockCurveController} from "../../helpers/MockCurveController.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {Test} from "forge-std/Test.sol";
@@ -30,12 +30,12 @@ contract CurveLlamalendAdapterTest is Test {
     // ─── Constructor ───────────────────────────────────────────────────
 
     function test_constructor_revertsOnZeroController() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new CurveLlamalendAdapter(address(0), priceOracle);
     }
 
     function test_constructor_revertsOnZeroPriceOracle() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new CurveLlamalendAdapter(address(controller), address(0));
     }
 
@@ -99,7 +99,7 @@ contract CurveLlamalendAdapterTest is Test {
     // ─── repay ─────────────────────────────────────────────────────────
 
     function test_repay_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.repay(user, address(borrowedToken), 0);
     }
 
@@ -128,12 +128,12 @@ contract CurveLlamalendAdapterTest is Test {
     // ─── withdrawCollateral ────────────────────────────────────────────
 
     function test_withdrawCollateral_revertsOnZeroAmount() public {
-        vm.expectRevert(AegisErrors.ZeroAmount.selector);
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 0, recipient);
     }
 
     function test_withdrawCollateral_revertsOnZeroRecipient() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 1e18, address(0));
     }
 

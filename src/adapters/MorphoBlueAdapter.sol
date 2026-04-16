@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {IProtocolAdapter} from "../interfaces/IProtocolAdapter.sol";
 import {IMorpho, IMorphoOracle} from "../interfaces/external/IMorpho.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -20,8 +20,8 @@ contract MorphoBlueAdapter is IProtocolAdapter {
         address morpho,
         bytes32 marketId
     ) {
-        if (morpho == address(0)) revert AegisErrors.ZeroAddress();
-        if (marketId == bytes32(0)) revert AegisErrors.ZeroAddress();
+        if (morpho == address(0)) revert SepehrErrors.ZeroAddress();
+        if (marketId == bytes32(0)) revert SepehrErrors.ZeroAddress();
         MORPHO = IMorpho(morpho);
         MARKET_ID = marketId;
     }
@@ -59,7 +59,7 @@ contract MorphoBlueAdapter is IProtocolAdapter {
         address debtAsset,
         uint256 amount
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
         IMorpho.MarketParams memory params = MORPHO.idToMarketParams(MARKET_ID);
         IERC20(debtAsset).forceApprove(address(MORPHO), amount);
         MORPHO.repay(params, amount, 0, user, "");
@@ -72,8 +72,8 @@ contract MorphoBlueAdapter is IProtocolAdapter {
         uint256 amount,
         address recipient
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
-        if (recipient == address(0)) revert AegisErrors.ZeroAddress();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
+        if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         IMorpho.MarketParams memory params = MORPHO.idToMarketParams(MARKET_ID);
         MORPHO.withdrawCollateral(params, amount, user, recipient);
     }

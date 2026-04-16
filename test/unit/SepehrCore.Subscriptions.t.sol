@@ -5,10 +5,10 @@ import {Test} from "forge-std/Test.sol";
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
-import {AegisCore} from "../../src/AegisCore.sol";
-import {IAegisCore} from "../../src/interfaces/IAegisCore.sol";
-import {AegisErrors} from "../../src/libraries/AegisErrors.sol";
-import {AegisEvents} from "../../src/libraries/AegisEvents.sol";
+import {SepehrCore} from "../../src/SepehrCore.sol";
+import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
+import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
+import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
 import {MockOracle} from "../../src/mocks/MockOracle.sol";
 
 contract MockERC20 is ERC20 {
@@ -29,8 +29,8 @@ contract MockERC20 is ERC20 {
     }
 }
 
-contract AegisCoreSubscriptionsTest is Test {
-    AegisCore public core;
+contract SepehrCoreSubscriptionsTest is Test {
+    SepehrCore public core;
     MockOracle public oracle;
     MockERC20 public usdc;
 
@@ -51,7 +51,7 @@ contract AegisCoreSubscriptionsTest is Test {
         oracle = new MockOracle();
         usdc = new MockERC20("USD Coin", "USDC");
 
-        core = new AegisCore(address(this), timelock, guardian, address(oracle), 500e8, 30);
+        core = new SepehrCore(address(this), timelock, guardian, address(oracle), 500e8, 30);
 
         // Fund alice and bob with USDC and approve the core contract
         usdc.mint(alice, 1000e6);
@@ -68,7 +68,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
         core.subscribe(1, address(usdc));
 
-        IAegisCore.Subscription memory sub = core.getSubscription(alice);
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
         assertEq(sub.tier, 1);
         assertEq(sub.expiresAt, block.timestamp + SUBSCRIPTION_PERIOD);
     }
@@ -77,7 +77,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
         core.subscribe(2, address(usdc));
 
-        IAegisCore.Subscription memory sub = core.getSubscription(alice);
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
         assertEq(sub.tier, 2);
         assertEq(sub.expiresAt, block.timestamp + SUBSCRIPTION_PERIOD);
     }
@@ -86,7 +86,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
         core.subscribe(3, address(usdc));
 
-        IAegisCore.Subscription memory sub = core.getSubscription(alice);
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
         assertEq(sub.tier, 3);
     }
 
@@ -95,7 +95,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
         core.subscribe(4, address(usdc));
 
-        IAegisCore.Subscription memory sub = core.getSubscription(alice);
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
         assertEq(sub.tier, 4);
     }
 
@@ -103,7 +103,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
 
         vm.expectEmit(true, false, false, true, address(core));
-        emit AegisEvents.Subscribed(alice, block.timestamp + SUBSCRIPTION_PERIOD, 1, block.chainid);
+        emit SepehrEvents.Subscribed(alice, block.timestamp + SUBSCRIPTION_PERIOD, 1, block.chainid);
 
         core.subscribe(1, address(usdc));
     }
@@ -130,19 +130,19 @@ contract AegisCoreSubscriptionsTest is Test {
     // ─── subscribe reverts ──────────────────────────────────────
 
     function test_subscribe_revertsOnTierZero() public {
-        vm.expectRevert(AegisErrors.InvalidTier.selector);
+        vm.expectRevert(SepehrErrors.InvalidTier.selector);
         vm.prank(alice);
         core.subscribe(0, address(usdc));
     }
 
     function test_subscribe_revertsOnTierFive() public {
-        vm.expectRevert(AegisErrors.InvalidTier.selector);
+        vm.expectRevert(SepehrErrors.InvalidTier.selector);
         vm.prank(alice);
         core.subscribe(5, address(usdc));
     }
 
     function test_subscribe_revertsOnTierAboveFour() public {
-        vm.expectRevert(AegisErrors.InvalidTier.selector);
+        vm.expectRevert(SepehrErrors.InvalidTier.selector);
         vm.prank(alice);
         core.subscribe(255, address(usdc));
     }
@@ -151,7 +151,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
         core.subscribe(1, address(usdc));
 
-        vm.expectRevert(AegisErrors.SubscriptionAlreadyActive.selector);
+        vm.expectRevert(SepehrErrors.SubscriptionAlreadyActive.selector);
         vm.prank(alice);
         core.subscribe(2, address(usdc));
     }
@@ -166,7 +166,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
         core.subscribe(2, address(usdc));
 
-        IAegisCore.Subscription memory sub = core.getSubscription(alice);
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
         assertEq(sub.tier, 2);
     }
 
@@ -184,7 +184,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
         core.renew(address(usdc));
 
-        IAegisCore.Subscription memory sub = core.getSubscription(alice);
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
         // Should extend from the original expiry, not from now
         assertEq(sub.expiresAt, originalExpiry + SUBSCRIPTION_PERIOD);
     }
@@ -202,7 +202,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
         core.renew(address(usdc));
 
-        IAegisCore.Subscription memory sub = core.getSubscription(alice);
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
         // Should extend from now (block.timestamp), not from old expiry
         assertEq(sub.expiresAt, renewTime + SUBSCRIPTION_PERIOD);
     }
@@ -216,7 +216,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
 
         vm.expectEmit(true, false, false, true, address(core));
-        emit AegisEvents.Renewed(alice, expectedExpiry, 1);
+        emit SepehrEvents.Renewed(alice, expectedExpiry, 1);
 
         core.renew(address(usdc));
     }
@@ -233,7 +233,7 @@ contract AegisCoreSubscriptionsTest is Test {
     }
 
     function test_renew_revertsWhenNoSubscription() public {
-        vm.expectRevert(AegisErrors.SubscriptionNotFound.selector);
+        vm.expectRevert(SepehrErrors.SubscriptionNotFound.selector);
         vm.prank(alice);
         core.renew(address(usdc));
     }
@@ -247,7 +247,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
         core.unsubscribe();
 
-        IAegisCore.Subscription memory sub = core.getSubscription(alice);
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
         assertEq(sub.tier, 0);
         assertEq(sub.expiresAt, 0);
         assertEq(sub.collateralValueUsdSnapshot, 0);
@@ -260,13 +260,13 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
 
         vm.expectEmit(true, false, false, false, address(core));
-        emit AegisEvents.Unsubscribed(alice);
+        emit SepehrEvents.Unsubscribed(alice);
 
         core.unsubscribe();
     }
 
     function test_unsubscribe_revertsWhenNoneExists() public {
-        vm.expectRevert(AegisErrors.SubscriptionNotFound.selector);
+        vm.expectRevert(SepehrErrors.SubscriptionNotFound.selector);
         vm.prank(alice);
         core.unsubscribe();
     }
@@ -278,7 +278,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
         core.unsubscribe();
 
-        vm.expectRevert(AegisErrors.SubscriptionNotFound.selector);
+        vm.expectRevert(SepehrErrors.SubscriptionNotFound.selector);
         vm.prank(alice);
         core.unsubscribe();
     }
@@ -289,7 +289,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
         core.subscribe(1, address(usdc));
 
-        IAegisCore.Subscription memory sub = core.getSubscription(alice);
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
         assertTrue(sub.expiresAt > block.timestamp);
     }
 
@@ -316,7 +316,7 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(alice);
         core.subscribe(2, address(usdc));
 
-        IAegisCore.Subscription memory sub = core.getSubscription(alice);
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
         assertEq(sub.tier, 2);
     }
 
@@ -325,7 +325,7 @@ contract AegisCoreSubscriptionsTest is Test {
     function test_subscribe_revertsWhenPaused() public {
         core.pause();
 
-        vm.expectRevert(AegisErrors.ContractPaused.selector);
+        vm.expectRevert(SepehrErrors.ContractPaused.selector);
         vm.prank(alice);
         core.subscribe(1, address(usdc));
     }
@@ -336,7 +336,7 @@ contract AegisCoreSubscriptionsTest is Test {
 
         core.pause();
 
-        vm.expectRevert(AegisErrors.ContractPaused.selector);
+        vm.expectRevert(SepehrErrors.ContractPaused.selector);
         vm.prank(alice);
         core.renew(address(usdc));
     }
@@ -350,8 +350,8 @@ contract AegisCoreSubscriptionsTest is Test {
         vm.prank(bob);
         core.subscribe(3, address(usdc));
 
-        IAegisCore.Subscription memory subAlice = core.getSubscription(alice);
-        IAegisCore.Subscription memory subBob = core.getSubscription(bob);
+        ISepehrCore.Subscription memory subAlice = core.getSubscription(alice);
+        ISepehrCore.Subscription memory subBob = core.getSubscription(bob);
 
         assertEq(subAlice.tier, 1);
         assertEq(subBob.tier, 3);

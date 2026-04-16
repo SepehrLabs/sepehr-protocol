@@ -3,23 +3,23 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 
-import {AegisCore} from "../../src/AegisCore.sol";
-import {IAegisCore} from "../../src/interfaces/IAegisCore.sol";
+import {SepehrCore} from "../../src/SepehrCore.sol";
+import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockDex} from "../../src/mocks/MockDex.sol";
 import {MockFlashLoan} from "../../src/mocks/MockFlashLoan.sol";
 import {MockOracle} from "../../src/mocks/MockOracle.sol";
-import {AegisCoreHandler, InvariantERC20} from "./AegisCoreHandler.sol";
+import {SepehrCoreHandler, InvariantERC20} from "./SepehrCoreHandler.sol";
 
-contract AegisCoreInvariantTest is Test {
-    AegisCore public core;
+contract SepehrCoreInvariantTest is Test {
+    SepehrCore public core;
     MockOracle public oracle;
     InvariantERC20 public usdc;
     InvariantERC20 public weth;
     MockAdapter public adapter;
     MockFlashLoan public flashLoan;
     MockDex public dex;
-    AegisCoreHandler public handler;
+    SepehrCoreHandler public handler;
 
     address public owner = address(this);
     address public timelock = makeAddr("timelock");
@@ -36,7 +36,7 @@ contract AegisCoreInvariantTest is Test {
         flashLoan = new MockFlashLoan();
         dex = new MockDex();
 
-        core = new AegisCore(owner, timelock, guardian, address(oracle), 500e8, 30);
+        core = new SepehrCore(owner, timelock, guardian, address(oracle), 500e8, 30);
 
         vm.startPrank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
@@ -45,7 +45,7 @@ contract AegisCoreInvariantTest is Test {
         core.addDexRouter(address(dex));
         vm.stopPrank();
 
-        handler = new AegisCoreHandler(core, usdc, weth, adapter, flashLoan, dex, timelock);
+        handler = new SepehrCoreHandler(core, usdc, weth, adapter, flashLoan, dex, timelock);
 
         targetContract(address(handler));
     }
@@ -55,7 +55,7 @@ contract AegisCoreInvariantTest is Test {
     function invariant_subscriptionTierBounded() public view {
         for (uint256 i = 0; i < handler.actorCount(); i++) {
             address actor = handler.actors(i);
-            IAegisCore.Subscription memory sub = core.getSubscription(actor);
+            ISepehrCore.Subscription memory sub = core.getSubscription(actor);
             assertTrue(sub.tier <= 4, "tier must be 0-4");
         }
     }
@@ -65,7 +65,7 @@ contract AegisCoreInvariantTest is Test {
     function invariant_zeroTierImpliesZeroExpiry() public view {
         for (uint256 i = 0; i < handler.actorCount(); i++) {
             address actor = handler.actors(i);
-            IAegisCore.Subscription memory sub = core.getSubscription(actor);
+            ISepehrCore.Subscription memory sub = core.getSubscription(actor);
             if (sub.tier == 0) {
                 assertEq(sub.expiresAt, 0, "tier 0 must have expiresAt 0");
             }
@@ -80,7 +80,7 @@ contract AegisCoreInvariantTest is Test {
     function invariant_protectionParamsBounded() public view {
         for (uint256 i = 0; i < handler.actorCount(); i++) {
             address actor = handler.actors(i);
-            IAegisCore.PositionProtection memory prot = core.getProtection(actor, PROTOCOL_KEY);
+            ISepehrCore.PositionProtection memory prot = core.getProtection(actor, PROTOCOL_KEY);
             if (!prot.enabled) continue;
             assertGe(prot.thresholdHF, core.MIN_HF_THRESHOLD(), "threshold below minimum");
             assertLe(prot.maxSlippageBps, core.MAX_SLIPPAGE_BPS(), "slippage above maximum");
@@ -93,7 +93,7 @@ contract AegisCoreInvariantTest is Test {
     function invariant_activeSubscriptionHasValidTier() public view {
         for (uint256 i = 0; i < handler.actorCount(); i++) {
             address actor = handler.actors(i);
-            IAegisCore.Subscription memory sub = core.getSubscription(actor);
+            ISepehrCore.Subscription memory sub = core.getSubscription(actor);
             if (sub.expiresAt > block.timestamp) {
                 assertTrue(sub.tier >= 1 && sub.tier <= 4, "active sub must have tier 1-4");
             }

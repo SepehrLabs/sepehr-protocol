@@ -5,11 +5,11 @@ import {Test} from "forge-std/Test.sol";
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
-import {AegisCore} from "../../src/AegisCore.sol";
-import {IAegisCore} from "../../src/interfaces/IAegisCore.sol";
+import {SepehrCore} from "../../src/SepehrCore.sol";
+import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
 import {IProtocolAdapter} from "../../src/interfaces/IProtocolAdapter.sol";
-import {AegisErrors} from "../../src/libraries/AegisErrors.sol";
-import {AegisEvents} from "../../src/libraries/AegisEvents.sol";
+import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
+import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockOracle} from "../../src/mocks/MockOracle.sol";
 
@@ -27,8 +27,8 @@ contract MockERC20 is ERC20 {
     }
 }
 
-contract AegisCoreAdminTest is Test {
-    AegisCore public core;
+contract SepehrCoreAdminTest is Test {
+    SepehrCore public core;
     MockOracle public oracle;
     MockAdapter public adapter;
 
@@ -43,7 +43,7 @@ contract AegisCoreAdminTest is Test {
         oracle = new MockOracle();
         adapter = new MockAdapter();
 
-        core = new AegisCore(owner, timelock, guardian, address(oracle), 500e8, 30);
+        core = new SepehrCore(owner, timelock, guardian, address(oracle), 500e8, 30);
     }
 
     // ─── addAdapter ─────────────────────────────────────────────
@@ -59,7 +59,7 @@ contract AegisCoreAdminTest is Test {
 
     function test_addAdapter_emitsEvent() public {
         vm.expectEmit(true, false, false, true, address(core));
-        emit AegisEvents.AdapterAdded(PROTOCOL_KEY, address(adapter));
+        emit SepehrEvents.AdapterAdded(PROTOCOL_KEY, address(adapter));
 
         vm.prank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
@@ -77,18 +77,18 @@ contract AegisCoreAdminTest is Test {
     }
 
     function test_addAdapter_revertsOnNonTimelock() public {
-        vm.expectRevert(AegisErrors.NotTimelock.selector);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
     }
 
     function test_addAdapter_revertsFromGuardian() public {
-        vm.expectRevert(AegisErrors.NotTimelock.selector);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
         vm.prank(guardian);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
     }
 
     function test_addAdapter_revertsOnZeroAddress() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         vm.prank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(0));
     }
@@ -98,7 +98,7 @@ contract AegisCoreAdminTest is Test {
         core.addAdapter(PROTOCOL_KEY, address(adapter));
 
         MockAdapter adapter2 = new MockAdapter();
-        vm.expectRevert(abi.encodeWithSelector(AegisErrors.AdapterAlreadyRegistered.selector, PROTOCOL_KEY));
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.AdapterAlreadyRegistered.selector, PROTOCOL_KEY));
         vm.prank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter2));
     }
@@ -121,7 +121,7 @@ contract AegisCoreAdminTest is Test {
         core.addAdapter(PROTOCOL_KEY, address(adapter));
 
         vm.expectEmit(true, false, false, false, address(core));
-        emit AegisEvents.AdapterRemoved(PROTOCOL_KEY);
+        emit SepehrEvents.AdapterRemoved(PROTOCOL_KEY);
 
         vm.prank(timelock);
         core.removeAdapter(PROTOCOL_KEY);
@@ -131,13 +131,13 @@ contract AegisCoreAdminTest is Test {
         vm.prank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
 
-        vm.expectRevert(AegisErrors.NotTimelock.selector);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
         core.removeAdapter(PROTOCOL_KEY);
     }
 
     function test_removeAdapter_revertsWhenNotRegistered() public {
         bytes32 unknownKey = keccak256("UNKNOWN");
-        vm.expectRevert(abi.encodeWithSelector(AegisErrors.AdapterNotRegistered.selector, unknownKey));
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.AdapterNotRegistered.selector, unknownKey));
         vm.prank(timelock);
         core.removeAdapter(unknownKey);
     }
@@ -158,7 +158,7 @@ contract AegisCoreAdminTest is Test {
         address keeper = makeAddr("keeper");
 
         vm.expectEmit(true, false, false, false, address(core));
-        emit AegisEvents.KeeperAdded(keeper);
+        emit SepehrEvents.KeeperAdded(keeper);
 
         vm.prank(timelock);
         core.addKeeper(keeper);
@@ -167,12 +167,12 @@ contract AegisCoreAdminTest is Test {
     function test_addKeeper_revertsOnNonTimelock() public {
         address keeper = makeAddr("keeper");
 
-        vm.expectRevert(AegisErrors.NotTimelock.selector);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
         core.addKeeper(keeper);
     }
 
     function test_addKeeper_revertsOnZeroAddress() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         vm.prank(timelock);
         core.addKeeper(address(0));
     }
@@ -199,14 +199,14 @@ contract AegisCoreAdminTest is Test {
         core.addKeeper(keeper);
 
         vm.expectEmit(true, false, false, false, address(core));
-        emit AegisEvents.KeeperRemoved(keeper);
+        emit SepehrEvents.KeeperRemoved(keeper);
 
         vm.prank(timelock);
         core.removeKeeper(keeper);
     }
 
     function test_removeKeeper_revertsOnNonTimelock() public {
-        vm.expectRevert(AegisErrors.NotTimelock.selector);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
         core.removeKeeper(makeAddr("keeper"));
     }
 
@@ -221,14 +221,14 @@ contract AegisCoreAdminTest is Test {
 
     function test_setFeeBps_emitsEvent() public {
         vm.expectEmit(false, false, false, true, address(core));
-        emit AegisEvents.FeeBpsUpdated(30, 50);
+        emit SepehrEvents.FeeBpsUpdated(30, 50);
 
         vm.prank(timelock);
         core.setFeeBps(50);
     }
 
     function test_setFeeBps_revertsOnNonTimelock() public {
-        vm.expectRevert(AegisErrors.NotTimelock.selector);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
         core.setFeeBps(50);
     }
 
@@ -256,7 +256,7 @@ contract AegisCoreAdminTest is Test {
 
     function test_pause_emitsEvent_fromGuardian() public {
         vm.expectEmit(true, false, false, false, address(core));
-        emit AegisEvents.EmergencyPaused(guardian);
+        emit SepehrEvents.EmergencyPaused(guardian);
 
         vm.prank(guardian);
         core.pause();
@@ -264,14 +264,14 @@ contract AegisCoreAdminTest is Test {
 
     function test_pause_emitsEvent_fromOwner() public {
         vm.expectEmit(true, false, false, false, address(core));
-        emit AegisEvents.EmergencyPaused(owner);
+        emit SepehrEvents.EmergencyPaused(owner);
 
         core.pause();
     }
 
     function test_pause_revertsFromRandomAddress() public {
         address rando = makeAddr("rando");
-        vm.expectRevert(AegisErrors.NotPauseGuardian.selector);
+        vm.expectRevert(SepehrErrors.NotPauseGuardian.selector);
         vm.prank(rando);
         core.pause();
     }
@@ -290,7 +290,7 @@ contract AegisCoreAdminTest is Test {
         core.pause();
 
         vm.expectEmit(true, false, false, false, address(core));
-        emit AegisEvents.Unpaused(owner);
+        emit SepehrEvents.Unpaused(owner);
 
         core.unpause();
     }
@@ -298,7 +298,7 @@ contract AegisCoreAdminTest is Test {
     function test_unpause_guardianCannotUnpause() public {
         core.pause();
 
-        vm.expectRevert(AegisErrors.NotOwner.selector);
+        vm.expectRevert(SepehrErrors.NotOwner.selector);
         vm.prank(guardian);
         core.unpause();
     }
@@ -307,7 +307,7 @@ contract AegisCoreAdminTest is Test {
         core.pause();
 
         address rando = makeAddr("rando");
-        vm.expectRevert(AegisErrors.NotOwner.selector);
+        vm.expectRevert(SepehrErrors.NotOwner.selector);
         vm.prank(rando);
         core.unpause();
     }
@@ -315,7 +315,7 @@ contract AegisCoreAdminTest is Test {
     function test_unpause_revertsFromTimelock() public {
         core.pause();
 
-        vm.expectRevert(AegisErrors.NotOwner.selector);
+        vm.expectRevert(SepehrErrors.NotOwner.selector);
         vm.prank(timelock);
         core.unpause();
     }
@@ -323,22 +323,22 @@ contract AegisCoreAdminTest is Test {
     // ─── Non-timelock admin calls revert ────────────────────────
 
     function test_addFlashLoanProvider_revertsOnNonTimelock() public {
-        vm.expectRevert(AegisErrors.NotTimelock.selector);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
         core.addFlashLoanProvider(makeAddr("provider"));
     }
 
     function test_removeFlashLoanProvider_revertsOnNonTimelock() public {
-        vm.expectRevert(AegisErrors.NotTimelock.selector);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
         core.removeFlashLoanProvider(makeAddr("provider"));
     }
 
     function test_addDexRouter_revertsOnNonTimelock() public {
-        vm.expectRevert(AegisErrors.NotTimelock.selector);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
         core.addDexRouter(makeAddr("dex"));
     }
 
     function test_removeDexRouter_revertsOnNonTimelock() public {
-        vm.expectRevert(AegisErrors.NotTimelock.selector);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
         core.removeDexRouter(makeAddr("dex"));
     }
 
@@ -346,12 +346,12 @@ contract AegisCoreAdminTest is Test {
         vm.prank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
 
-        vm.expectRevert(AegisErrors.NotTimelock.selector);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
         core.setAdapterEnabled(PROTOCOL_KEY, false);
     }
 
     function test_setPauseGuardian_revertsOnNonTimelock() public {
-        vm.expectRevert(AegisErrors.NotTimelock.selector);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
         core.setPauseGuardian(makeAddr("newGuardian"));
     }
 
@@ -433,7 +433,7 @@ contract AegisCoreAdminTest is Test {
         core.addAdapter(PROTOCOL_KEY, address(adapter));
 
         vm.expectEmit(true, false, false, false, address(core));
-        emit AegisEvents.AdapterDisabled(PROTOCOL_KEY);
+        emit SepehrEvents.AdapterDisabled(PROTOCOL_KEY);
 
         vm.prank(timelock);
         core.setAdapterEnabled(PROTOCOL_KEY, false);
@@ -447,7 +447,7 @@ contract AegisCoreAdminTest is Test {
         core.setAdapterEnabled(PROTOCOL_KEY, false);
 
         vm.expectEmit(true, false, false, false, address(core));
-        emit AegisEvents.AdapterEnabled(PROTOCOL_KEY);
+        emit SepehrEvents.AdapterEnabled(PROTOCOL_KEY);
 
         vm.prank(timelock);
         core.setAdapterEnabled(PROTOCOL_KEY, true);
@@ -468,14 +468,14 @@ contract AegisCoreAdminTest is Test {
         address newGuardian = makeAddr("newGuardian");
 
         vm.expectEmit(true, true, false, false, address(core));
-        emit AegisEvents.PauseGuardianUpdated(guardian, newGuardian);
+        emit SepehrEvents.PauseGuardianUpdated(guardian, newGuardian);
 
         vm.prank(timelock);
         core.setPauseGuardian(newGuardian);
     }
 
     function test_setPauseGuardian_revertsOnZeroAddress() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         vm.prank(timelock);
         core.setPauseGuardian(address(0));
     }
@@ -483,18 +483,18 @@ contract AegisCoreAdminTest is Test {
     // ─── Constructor validation ─────────────────────────────────
 
     function test_constructor_revertsOnZeroTimelock() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
-        new AegisCore(owner, address(0), guardian, address(oracle), 500e8, 30);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        new SepehrCore(owner, address(0), guardian, address(oracle), 500e8, 30);
     }
 
     function test_constructor_revertsOnZeroGuardian() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
-        new AegisCore(owner, timelock, address(0), address(oracle), 500e8, 30);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        new SepehrCore(owner, timelock, address(0), address(oracle), 500e8, 30);
     }
 
     function test_constructor_revertsOnZeroOracle() public {
-        vm.expectRevert(AegisErrors.ZeroAddress.selector);
-        new AegisCore(owner, timelock, guardian, address(0), 500e8, 30);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        new SepehrCore(owner, timelock, guardian, address(0), 500e8, 30);
     }
 
     function test_constructor_setsInitialValues() public {

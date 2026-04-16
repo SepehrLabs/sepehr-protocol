@@ -10,7 +10,7 @@ interface IFlashLoanProvider {
     ///         before the transaction ends.
     /// @param asset The ERC20 token to borrow.
     /// @param amount The amount to borrow.
-    /// @param callback The address to call back (must implement IAegisCallback).
+    /// @param callback The address to call back (must implement ISepehrCallback).
     /// @param data Arbitrary data forwarded to the callback.
     function flashBorrow(
         address asset,

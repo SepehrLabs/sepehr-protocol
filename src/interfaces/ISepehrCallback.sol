@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-/// @title IAegisCallback
+/// @title ISepehrCallback
 /// @notice Callback interface invoked by flash-loan providers during the flash-loan execution.
-///         AegisCore implements this to perform the repay/withdraw/swap/refund sequence.
-interface IAegisCallback {
+///         SepehrCore implements this to perform the repay/withdraw/swap/refund sequence.
+interface ISepehrCallback {
     /// @notice Called by the flash-loan provider after transferring `amount` of `asset`.
     ///         The implementer must repay the flash loan (principal + fee) before returning.
     /// @param asset The borrowed asset.

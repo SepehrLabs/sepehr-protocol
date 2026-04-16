@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Script, console} from "forge-std/Script.sol";
 
-import {AegisCore} from "../src/AegisCore.sol";
+import {SepehrCore} from "../src/SepehrCore.sol";
 import {AaveV3Adapter} from "../src/adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../src/adapters/CompoundV3Adapter.sol";
 import {CamelotRouter} from "../src/dex/CamelotRouter.sol";
@@ -18,7 +18,7 @@ import {UniswapV3FlashLoanProvider} from "../src/flash/UniswapV3FlashLoanProvide
 contract DeployPeripherals is Script {
     function run() external {
         address deployer = vm.envAddress("DEPLOYER_ADDRESS");
-        address coreAddr = vm.envAddress("AEGIS_CORE");
+        address coreAddr = vm.envAddress("SEPEHR_CORE");
 
         vm.startBroadcast(deployer);
 
@@ -28,7 +28,7 @@ contract DeployPeripherals is Script {
 
         vm.stopBroadcast();
 
-        console.log("Peripherals deployed. Register them via AegisTimelock on core:", coreAddr);
+        console.log("Peripherals deployed. Register them via SepehrTimelock on core:", coreAddr);
     }
 
     function _deployFlashProviders() internal {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-library AegisErrors {
+library SepehrErrors {
     error NotKeeper();
     error NotOwner();
     error NotTimelock();

@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {IDexRouter} from "../interfaces/IDexRouter.sol";
 import {IVelodromeRouter} from "../interfaces/external/IVelodromeRouter.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -22,7 +22,7 @@ contract VelodromeRouter is IDexRouter {
         address poolFactory,
         bool defaultStable
     ) {
-        if (router == address(0) || poolFactory == address(0)) revert AegisErrors.ZeroAddress();
+        if (router == address(0) || poolFactory == address(0)) revert SepehrErrors.ZeroAddress();
         ROUTER = IVelodromeRouter(router);
         POOL_FACTORY = poolFactory;
         DEFAULT_STABLE = defaultStable;
@@ -36,7 +36,7 @@ contract VelodromeRouter is IDexRouter {
         uint256 minAmountOut,
         bytes calldata routeData
     ) external override returns (uint256 amountOut) {
-        if (amountIn == 0) revert AegisErrors.ZeroAmount();
+        if (amountIn == 0) revert SepehrErrors.ZeroAmount();
 
         bool stable = routeData.length > 0 ? abi.decode(routeData, (bool)) : DEFAULT_STABLE;
 

@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {IProtocolAdapter} from "../interfaces/IProtocolAdapter.sol";
 import {IComet} from "../interfaces/external/IComet.sol";
-import {AegisErrors} from "../libraries/AegisErrors.sol";
+import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -18,7 +18,7 @@ contract CompoundV3Adapter is IProtocolAdapter {
     constructor(
         address comet
     ) {
-        if (comet == address(0)) revert AegisErrors.ZeroAddress();
+        if (comet == address(0)) revert SepehrErrors.ZeroAddress();
         COMET = IComet(comet);
     }
 
@@ -60,7 +60,7 @@ contract CompoundV3Adapter is IProtocolAdapter {
         address debtAsset,
         uint256 amount
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(COMET), amount);
         COMET.supplyTo(user, debtAsset, amount);
     }
@@ -72,8 +72,8 @@ contract CompoundV3Adapter is IProtocolAdapter {
         uint256 amount,
         address recipient
     ) external {
-        if (amount == 0) revert AegisErrors.ZeroAmount();
-        if (recipient == address(0)) revert AegisErrors.ZeroAddress();
+        if (amount == 0) revert SepehrErrors.ZeroAmount();
+        if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         COMET.withdrawFrom(user, recipient, collateralAsset, amount);
     }
 
