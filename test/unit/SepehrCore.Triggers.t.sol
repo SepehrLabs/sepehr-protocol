@@ -732,6 +732,6 @@ contract SequentialMockAdapter {
     function getCollateralValueUsd(
         address
     ) external pure returns (uint256) {
-        return 100_000e8;
+        return 10_000e8; // $10k — below Shield tier cap ($15k) so execute() passes H01 check
     }
 }

@@ -25,6 +25,7 @@ library SepehrErrors {
     error InsufficientPayment(uint256 required, uint256 provided);
 
     error BelowMinimumCollateral(uint256 usdValue, uint256 minimumUsd);
+    error TierCollateralCapExceeded(uint256 usdValue, uint256 capUsd);
     error ThresholdTooLow(uint256 threshold, uint256 minimum);
     error RepayPercentTooHigh(uint256 bps, uint256 maxBps);
     error InvalidSlippage(uint256 bps);

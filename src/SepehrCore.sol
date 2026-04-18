@@ -312,6 +312,20 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             revert SepehrErrors.HealthFactorAboveThreshold(hfBefore, prot.thresholdHF);
         }
 
+        // H01: enforce the tier's collateral-value cap at the moment of execution. Checking
+        // only at subscription would let a user grow their position after subscribing and
+        // receive protection beyond what their tier economically justifies. Titan (tier 4) has
+        // an unbounded cap (type(uint256).max) and is skipped.
+        {
+            uint256 tierCap = TIER_MAX_COLLATERAL_USD_8[_subscriptions[user].tier - 1];
+            if (tierCap != type(uint256).max) {
+                uint256 collateralUsd = entry.adapter.getCollateralValueUsd(user);
+                if (collateralUsd > tierCap) {
+                    revert SepehrErrors.TierCollateralCapExceeded(collateralUsd, tierCap);
+                }
+            }
+        }
+
         if (repayAmount == 0) revert SepehrErrors.ZeroAmount();
 
         if (!allowedDexRouters[dexRouter]) revert SepehrErrors.NotAuthorized();
