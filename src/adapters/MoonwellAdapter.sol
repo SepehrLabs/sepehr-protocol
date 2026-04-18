@@ -6,12 +6,16 @@ import {ICToken, ICompoundOracle, IComptroller} from "../interfaces/external/ICT
 import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title MoonwellAdapter
 /// @notice Protocol adapter for Moonwell (Base, Optimism). Moonwell is a Compound V2
 ///         fork with Comptroller and mTokens exposing the same liquidity-accounting
 ///         and redeem/repay surface as Compound V2.
-contract MoonwellAdapter is IProtocolAdapter {
+/// @dev Audit B16: share the same hardening as the other CompoundV2-fork adapters — inherit
+///      ReentrancyGuard, accrue interest explicitly, and read `exchangeRateStored()` to keep
+///      the redeem path free of state-mutating getter calls that could fan out to a custom IRM.
+contract MoonwellAdapter is IProtocolAdapter, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IComptroller public immutable COMPTROLLER;
@@ -64,11 +68,12 @@ contract MoonwellAdapter is IProtocolAdapter {
     /// @inheritdoc IProtocolAdapter
     /// @dev Audit B12: sweep residual `debtAsset` back to Core after `repayBorrowBehalf`, which
     ///      caps at the user's outstanding debt and may return surplus to this adapter.
+    ///      Audit B16: `nonReentrant` — CompoundV2-fork defense-in-depth against IRM-callback reentrancy.
     function repay(
         address user,
         address debtAsset,
         uint256 amount
-    ) external onlyCore {
+    ) external onlyCore nonReentrant {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(MTOKEN), amount);
         MTOKEN.repayBorrowBehalf(user, amount);
@@ -79,16 +84,19 @@ contract MoonwellAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B16: explicit `accrueInterest()` + `exchangeRateStored()` in place of
+    ///      `exchangeRateCurrent()` (state-mutating), plus `nonReentrant` as belt-and-braces.
     function withdrawCollateral(
         address user,
         address collateralAsset,
         uint256 amount,
         address recipient
-    ) external onlyCore {
+    ) external onlyCore nonReentrant {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
 
-        uint256 exchangeRate = MTOKEN.exchangeRateCurrent();
+        MTOKEN.accrueInterest();
+        uint256 exchangeRate = MTOKEN.exchangeRateStored();
         uint256 mTokenAmount = (amount * 1e18 + exchangeRate - 1) / exchangeRate;
 
         IERC20(address(MTOKEN)).safeTransferFrom(user, address(this), mTokenAmount);

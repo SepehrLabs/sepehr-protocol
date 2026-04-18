@@ -42,9 +42,15 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
     ///      margin has fallen to or past -100% (health <= -1e18).
     ///      Audit B6: the prior `1e18 + uint256(health)` branch had no
     ///      handling for negative health and collapsed the whole range to 0.
+    ///      Audit B18: short-circuit zero-debt positions to `type(uint256).max` so the
+    ///      empty-position semantics match Aave/Morpho/Euler/Compound V3/Maker/Gearbox. Without
+    ///      this guard Curve's `health()` may revert on unopened loans, which would corrupt
+    ///      keeper batch monitoring that treats `max` as "no debt, nothing to do".
     function getHealthFactor(
         address user
     ) external view returns (uint256 healthFactor) {
+        uint256[4] memory state = CONTROLLER.user_state(user);
+        if (state[2] == 0) return type(uint256).max;
         int256 health = CONTROLLER.health(user);
         if (health <= -1e18) return 0;
         return uint256(int256(1e18) + health);
@@ -66,12 +72,19 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
     /// @inheritdoc IProtocolAdapter
     /// @dev Audit B12: sweep residual `debtAsset` after `repay`, which caps at the user's
     ///      outstanding debt and may leave a surplus in the adapter.
+    ///      Audit B17: Curve LLAMMA controllers borrow a single known `borrowed_token` (crvUSD
+    ///      on mainnet). Reject any other `debtAsset` before touching approvals to avoid
+    ///      stranding a stale approval on a token Curve will never pull.
     function repay(
         address user,
         address debtAsset,
         uint256 amount
     ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
+        address expected = CONTROLLER.borrowed_token();
+        if (debtAsset != expected) {
+            revert SepehrErrors.DebtAssetMismatch(expected, debtAsset);
+        }
         IERC20(debtAsset).forceApprove(address(CONTROLLER), amount);
         CONTROLLER.repay(amount, user);
         uint256 surplus = IERC20(debtAsset).balanceOf(address(this));

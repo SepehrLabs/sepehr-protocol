@@ -17,6 +17,7 @@ contract MockCreditManager is ICreditManager {
     }
 
     address private _creditFacade;
+    address private _underlying;
     mapping(address => address) private _creditAccounts;
     mapping(address => DebtAndCollateral) private _debtAndCollateral;
 
@@ -24,6 +25,12 @@ contract MockCreditManager is ICreditManager {
         address facade
     ) {
         _creditFacade = facade;
+    }
+
+    function setUnderlying(
+        address token
+    ) external {
+        _underlying = token;
     }
 
     // ── Setters ────────────────────────────────────────────────────────
@@ -62,6 +69,10 @@ contract MockCreditManager is ICreditManager {
 
     function creditFacade() external view override returns (address) {
         return _creditFacade;
+    }
+
+    function underlying() external view override returns (address) {
+        return _underlying;
     }
 
     function creditAccounts(

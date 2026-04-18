@@ -6,11 +6,18 @@ import {ICToken, ICompoundOracle, IComptroller} from "../interfaces/external/ICT
 import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title CompoundV2Adapter
 /// @notice Protocol adapter for Compound V2 positions. Uses Comptroller liquidity
 ///         data for health factor approximation and handles cToken-based repay/withdraw.
-contract CompoundV2Adapter is IProtocolAdapter {
+/// @dev Audit B16: inherits ReentrancyGuard and gates state-changing functions with
+///      nonReentrant. Compound V2's interest-rate-model callbacks have historically been
+///      reentrancy vectors when combined with unaudited custom IRMs (as used by some
+///      Venus/Moonwell markets). `withdrawCollateral` explicitly calls `accrueInterest()`
+///      and reads `exchangeRateStored()` instead of invoking the state-mutating
+///      `exchangeRateCurrent()`, so the IRM hook runs exactly once in a controlled spot.
+contract CompoundV2Adapter is IProtocolAdapter, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IComptroller public immutable COMPTROLLER;
@@ -63,11 +70,12 @@ contract CompoundV2Adapter is IProtocolAdapter {
     /// @inheritdoc IProtocolAdapter
     /// @dev Audit B12: Compound V2 `repayBorrowBehalf` caps at the user's outstanding debt; any
     ///      unused `debtAsset` must be swept back to Core so it isn't stranded in the adapter.
+    ///      Audit B16: `nonReentrant` defends against IRM-callback reentrancy on non-stock markets.
     function repay(
         address user,
         address debtAsset,
         uint256 amount
-    ) external onlyCore {
+    ) external onlyCore nonReentrant {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(CTOKEN), amount);
         CTOKEN.repayBorrowBehalf(user, amount);
@@ -78,16 +86,21 @@ contract CompoundV2Adapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B16: drive interest accrual explicitly via `accrueInterest()`, then read the
+    ///      stored exchange rate. `exchangeRateCurrent()` is a state-mutating call disguised as a
+    ///      getter — routing through it once, mid-withdraw, fans out to an IRM that on custom-IRM
+    ///      markets has historically enabled reentrancy. `nonReentrant` is the belt-and-braces guard.
     function withdrawCollateral(
         address user,
         address collateralAsset,
         uint256 amount,
         address recipient
-    ) external onlyCore {
+    ) external onlyCore nonReentrant {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
 
-        uint256 exchangeRate = CTOKEN.exchangeRateCurrent();
+        CTOKEN.accrueInterest();
+        uint256 exchangeRate = CTOKEN.exchangeRateStored();
         uint256 cTokenAmount = (amount * 1e18 + exchangeRate - 1) / exchangeRate;
 
         IERC20(address(CTOKEN)).safeTransferFrom(user, address(this), cTokenAmount);

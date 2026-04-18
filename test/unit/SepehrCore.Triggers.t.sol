@@ -16,9 +16,15 @@ import {MockFlashLoan} from "../../src/mocks/MockFlashLoan.sol";
 import {MockChainlinkAggregator} from "../helpers/MockChainlinkAggregator.sol";
 
 contract MockERC20 is ERC20 {
-    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
+    constructor(
+        string memory name_,
+        string memory symbol_
+    ) ERC20(name_, symbol_) {}
 
-    function mint(address to, uint256 amount) external {
+    function mint(
+        address to,
+        uint256 amount
+    ) external {
         _mint(to, amount);
     }
 }
@@ -818,7 +824,9 @@ contract SepehrCoreTriggersTest is Test {
     /// @dev Internal helper — wires a fresh SequentialMockAdapter under `seqKey`,
     /// enables alice's protection against it, and funds the DEX + adapter so a
     /// collateral→debt swap is possible. Keeps each D2 test self-contained.
-    function _setupForSwap(bytes32 seqKey) internal {
+    function _setupForSwap(
+        bytes32 seqKey
+    ) internal {
         SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
         seqAdapter.setDelegation(alice, true);
 
@@ -1023,6 +1031,46 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(keeper);
         core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
     }
+
+    /// @notice B15: `hfBefore` below `MIN_PLAUSIBLE_HF_WAD` must revert — this is the on-chain
+    /// backstop against an oracle-manipulated adapter reporting a near-zero HF to extract fees.
+    function test_execute_revertsOnImplausiblyLowHF() public {
+        uint256 tooLow = core.MIN_PLAUSIBLE_HF_WAD() - 1;
+        adapter.setHealthFactor(alice, tooLow);
+        address[] memory providers = _buildFlashProviders();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SepehrErrors.ImplausibleHealthFactor.selector, tooLow, core.MIN_PLAUSIBLE_HF_WAD())
+        );
+        vm.prank(keeper);
+        core.execute(
+            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
+        );
+    }
+
+    /// @notice B15: `hfBefore` exactly at the floor still reverts (`<` vs `<=` boundary).
+    function test_execute_acceptsHFAtPlausibleFloor() public {
+        uint256 floor = core.MIN_PLAUSIBLE_HF_WAD();
+        adapter.setHealthFactor(alice, floor);
+        address[] memory providers = _buildFlashProviders();
+
+        // At the floor HF is plausible; revert source is now HealthFactorAboveThreshold? No —
+        // floor (0.5e18) < THRESHOLD_HF (1.3e18), so we would fall through the B15 check and
+        // into the normal trigger path. Use a SequentialMockAdapter for the full trip.
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(floor, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(alice, true);
+        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
+
+        bytes32 seqKey = keccak256("B15_FLOOR_PROTOCOL");
+        vm.prank(timelock);
+        core.addAdapter(seqKey, address(seqAdapter));
+        vm.prank(alice);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
+
+        debtToken.mint(address(flashLoan), REPAY_AMOUNT * 10);
+        vm.prank(keeper);
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+    }
 }
 
 /// @dev A mock adapter that simulates HF improvement after repayment.
@@ -1031,42 +1079,69 @@ contract SequentialMockAdapter {
     uint256 public currentHF;
     uint256 public postRepayHF;
 
-    constructor(uint256 _initialHF, uint256 _postRepayHF) {
+    constructor(
+        uint256 _initialHF,
+        uint256 _postRepayHF
+    ) {
         currentHF = _initialHF;
         postRepayHF = _postRepayHF;
     }
 
-    function reset(uint256 _initialHF, uint256 _postRepayHF) external {
+    function reset(
+        uint256 _initialHF,
+        uint256 _postRepayHF
+    ) external {
         currentHF = _initialHF;
         postRepayHF = _postRepayHF;
     }
 
-    function setDelegation(address user, bool delegated) external {
+    function setDelegation(
+        address user,
+        bool delegated
+    ) external {
         delegations[user] = delegated;
     }
 
-    function getHealthFactor(address) external view returns (uint256) {
+    function getHealthFactor(
+        address
+    ) external view returns (uint256) {
         return currentHF;
     }
 
-    function checkDelegation(address user) external view returns (bool) {
+    function checkDelegation(
+        address user
+    ) external view returns (bool) {
         return delegations[user];
     }
 
-    function repay(address, address debtAsset, uint256 amount) external {
+    function repay(
+        address,
+        address debtAsset,
+        uint256 amount
+    ) external {
         ERC20(debtAsset).transfer(address(0xdead), amount);
         currentHF = postRepayHF;
     }
 
-    function withdrawCollateral(address, address collateralAsset, uint256 amount, address recipient) external {
+    function withdrawCollateral(
+        address,
+        address collateralAsset,
+        uint256 amount,
+        address recipient
+    ) external {
         ERC20(collateralAsset).transfer(recipient, amount);
     }
 
-    function getCollateralValueUsd(address) external pure returns (uint256) {
+    function getCollateralValueUsd(
+        address
+    ) external pure returns (uint256) {
         return 10_000e8; // $10k — below Shield tier cap ($15k) so execute() passes H01 check
     }
 
-    function getDebt(address, address) external pure returns (uint256) {
+    function getDebt(
+        address,
+        address
+    ) external pure returns (uint256) {
         return 0;
     }
 }

@@ -17,6 +17,16 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 ///      (b) the adapter exposes no other public mutator. Any additional state-changing
 ///      function added here MUST also be gated by `onlyCore` or explicitly scoped to a
 ///      non-manager pathway; otherwise, manager rights become an unrestricted drain vector.
+/// @dev Audit B15 — Morpho oracle trust model: Morpho markets are immutable; the oracle
+///      contract is fixed in the market's `params.oracle` at market creation, and is the
+///      only price source feeding `getHealthFactor`. A Sepehr deployment therefore implicitly
+///      whitelists a Morpho oracle by registering an adapter for that specific `MARKET_ID`.
+///      Because `addAdapter` is timelock-gated, every Morpho oracle entering Sepehr gets a
+///      ≥48h review window — operators MUST audit `idToMarketParams(MARKET_ID).oracle` for
+///      manipulation resistance (push vs. pull, Chainlink-backed vs. custom, admin-mutability)
+///      before registering the adapter. Belt-and-braces: SepehrCore.execute rejects HFs below
+///      `MIN_PLAUSIBLE_HF_WAD`, so an oracle that reports "0" can't be used to extract fees
+///      even if the adapter-level review misses a pathological source.
 contract MorphoBlueAdapter is IProtocolAdapter {
     using SafeERC20 for IERC20;
 
@@ -91,6 +101,9 @@ contract MorphoBlueAdapter is IProtocolAdapter {
     /// @inheritdoc IProtocolAdapter
     /// @dev Audit B12: Morpho `repay` caps at the user's outstanding debt shares; excess
     ///      `debtAsset` stays in the adapter and is swept back to Core.
+    ///      Audit B17: the adapter previously approved `debtAsset` to Morpho but let Morpho pull
+    ///      the market's `loanToken`. A mis-specified `debtAsset` left a stale approval on the
+    ///      wrong token and reverted deep inside Morpho's transferFrom path. Fail fast instead.
     function repay(
         address user,
         address debtAsset,
@@ -98,6 +111,9 @@ contract MorphoBlueAdapter is IProtocolAdapter {
     ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IMorpho.MarketParams memory params = MORPHO.idToMarketParams(MARKET_ID);
+        if (debtAsset != params.loanToken) {
+            revert SepehrErrors.DebtAssetMismatch(params.loanToken, debtAsset);
+        }
         IERC20(debtAsset).forceApprove(address(MORPHO), amount);
         MORPHO.repay(params, amount, 0, user, "");
         uint256 surplus = IERC20(debtAsset).balanceOf(address(this));

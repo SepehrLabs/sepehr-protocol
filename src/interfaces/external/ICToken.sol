@@ -30,6 +30,8 @@ interface ICToken {
 
     function exchangeRateStored() external view returns (uint256);
 
+    function accrueInterest() external returns (uint256);
+
     function balanceOf(
         address owner
     ) external view returns (uint256);

@@ -53,14 +53,29 @@ contract CurveLlamalendAdapterTest is Test {
 
     // ─── getHealthFactor ───────────────────────────────────────────────
 
+    /// @dev B18: zero-debt positions return `type(uint256).max`. Tests exercising the health-
+    /// conversion math need a non-zero debt in `user_state[2]` or they short-circuit to max.
+    function _seedDebt(
+        address u
+    ) internal {
+        controller.setUserState(u, 0, 0, 1, 0);
+    }
+
+    function test_getHealthFactor_zeroDebtReturnsMax() public view {
+        // B18: no debt ⇒ HF = type(uint256).max regardless of Curve's `health` return value.
+        assertEq(adapter.getHealthFactor(user), type(uint256).max);
+    }
+
     function test_getHealthFactor_returnsOneAtThreshold() public {
         // Curve health = 0 is the liquidation boundary ⇒ HF = 1.0.
+        _seedDebt(user);
         controller.setHealth(user, 0);
         assertEq(adapter.getHealthFactor(user), 1e18);
     }
 
     function test_getHealthFactor_returnsZeroWhenClamped() public {
         // health ≤ -1e18 ⇒ HF = 0 (margin gone, position unredeemable).
+        _seedDebt(user);
         controller.setHealth(user, -1e18);
         assertEq(adapter.getHealthFactor(user), 0);
         controller.setHealth(user, -2e18);
@@ -69,16 +84,19 @@ contract CurveLlamalendAdapterTest is Test {
 
     function test_getHealthFactor_negativeButAboveFloor() public {
         // health = -0.5e18 ⇒ HF = 0.5e18 (below liquidation, not yet worthless).
+        _seedDebt(user);
         controller.setHealth(user, -0.5e18);
         assertEq(adapter.getHealthFactor(user), 0.5e18);
     }
 
     function test_getHealthFactor_convertsPositiveHealth() public {
+        _seedDebt(user);
         controller.setHealth(user, 0.5e18);
         assertEq(adapter.getHealthFactor(user), 1.5e18);
     }
 
     function test_getHealthFactor_highHealth() public {
+        _seedDebt(user);
         controller.setHealth(user, 2e18);
         assertEq(adapter.getHealthFactor(user), 3e18);
     }
@@ -87,6 +105,8 @@ contract CurveLlamalendAdapterTest is Test {
         address alice = makeAddr("alice");
         address bob = makeAddr("bob");
 
+        _seedDebt(alice);
+        _seedDebt(bob);
         controller.setHealth(alice, 0.1e18);
         controller.setHealth(bob, 1e18);
 
@@ -219,6 +239,7 @@ contract CurveLlamalendAdapterTest is Test {
         int256 health
     ) public {
         health = bound(health, type(int256).min, -1e18);
+        _seedDebt(user);
         controller.setHealth(user, health);
         assertEq(adapter.getHealthFactor(user), 0);
     }
@@ -227,6 +248,7 @@ contract CurveLlamalendAdapterTest is Test {
         int256 health
     ) public {
         health = bound(health, -1e18 + 1, type(int128).max);
+        _seedDebt(user);
         controller.setHealth(user, health);
         assertEq(adapter.getHealthFactor(user), uint256(int256(1e18) + health));
     }

@@ -92,6 +92,13 @@ contract GearboxAdapter is IProtocolAdapter {
         uint256 amount
     ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
+        // Audit B17: Gearbox V3 credit accounts borrow the credit manager's `underlying()` only.
+        // A wrong `debtAsset` would have been transferred into the credit account and then
+        // stranded there on `decreaseDebt` revert. Reject up-front.
+        address expectedUnderlying = CREDIT_MANAGER.underlying();
+        if (debtAsset != expectedUnderlying) {
+            revert SepehrErrors.DebtAssetMismatch(expectedUnderlying, debtAsset);
+        }
         address creditAccount = CREDIT_MANAGER.creditAccounts(user);
         if (creditAccount == address(0)) revert SepehrErrors.ZeroAddress();
         // Transfer debt tokens to the credit account, then call botMulticall to decrease debt.

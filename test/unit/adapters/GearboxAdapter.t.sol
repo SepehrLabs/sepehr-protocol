@@ -27,6 +27,9 @@ contract GearboxAdapterTest is Test {
         collateralToken = new MockERC20("Collateral", "COL");
         facade = new MockCreditFacade();
         creditManager = new MockCreditManager(address(facade));
+        // B17: adapter.repay now requires debtAsset == CREDIT_MANAGER.underlying(). Seed the
+        // mock credit manager with the debt token address up front so the happy-path tests line up.
+        creditManager.setUnderlying(address(debtToken));
         botList = new MockBotList();
 
         adapter = new GearboxAdapter(address(creditManager), address(botList), core);

@@ -18,6 +18,8 @@ interface ICreditFacade {
 interface ICreditManager {
     function creditFacade() external view returns (address);
 
+    function underlying() external view returns (address);
+
     function creditAccounts(
         address borrower
     ) external view returns (address);

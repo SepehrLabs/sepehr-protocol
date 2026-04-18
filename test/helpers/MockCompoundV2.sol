@@ -126,6 +126,10 @@ contract MockCToken is ERC20, ICToken {
         return _exchangeRate;
     }
 
+    function accrueInterest() external pure returns (uint256) {
+        return 0;
+    }
+
     function repayBorrowBehalf(
         address borrower,
         uint256 repayAmount
