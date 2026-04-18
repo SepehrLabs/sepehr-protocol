@@ -5,6 +5,7 @@ import {CompoundV2Adapter} from "../../../src/adapters/CompoundV2Adapter.sol";
 import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockCToken, MockCompoundOracle, MockComptroller} from "../../helpers/MockCompoundV2.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
+import {MockFeeOnTransferERC20} from "../../helpers/MockFeeOnTransferERC20.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract CompoundV2AdapterTest is Test {
@@ -190,6 +191,35 @@ contract CompoundV2AdapterTest is Test {
         assertEq(cToken.lastRedeemAmount(), withdrawAmount);
         assertEq(underlying.balanceOf(recipient), withdrawAmount);
         assertEq(cToken.balanceOf(user), 0);
+    }
+
+    function test_withdrawCollateral_revertsOnFeeOnTransferUnderlying() public {
+        // Audit B19: a fee-on-transfer underlying must trip the balance-delta guard. Without it,
+        // the adapter would receive less than `amount` from `redeemUnderlying` and the subsequent
+        // `safeTransfer(recipient, amount)` would revert on insufficient balance — a silent
+        // mis-accounting mode. The explicit `UnsupportedTokenBehavior` revert is the load-bearing
+        // signal for the keeper / incident response.
+        MockFeeOnTransferERC20 fotUnderlying = new MockFeeOnTransferERC20("FOT", "FOT", 100); // 1% fee
+        MockCToken fotCToken = new MockCToken("cFOT", "cFOT", address(fotUnderlying));
+        CompoundV2Adapter fotAdapter = new CompoundV2Adapter(address(comptroller), address(fotCToken), core);
+
+        uint256 exchangeRate = 1e18;
+        fotCToken.setExchangeRate(exchangeRate);
+
+        uint256 withdrawAmount = 10e18;
+        uint256 expectedCTokenAmount = (withdrawAmount * 1e18 + exchangeRate - 1) / exchangeRate;
+
+        fotCToken.mint(user, expectedCTokenAmount);
+        vm.prank(user);
+        fotCToken.approve(address(fotAdapter), expectedCTokenAmount);
+
+        // cToken holds enough underlying to `transfer` the full amount, but the FoT tax
+        // reduces what actually lands on the adapter.
+        fotUnderlying.mint(address(fotCToken), withdrawAmount * 2);
+
+        vm.prank(core);
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.UnsupportedTokenBehavior.selector, address(fotUnderlying)));
+        fotAdapter.withdrawCollateral(user, address(fotUnderlying), withdrawAmount, recipient);
     }
 
     function test_withdrawCollateral_roundsUpCTokenAmount() public {

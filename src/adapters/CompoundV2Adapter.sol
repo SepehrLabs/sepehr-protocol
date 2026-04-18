@@ -93,6 +93,11 @@ contract CompoundV2Adapter is IProtocolAdapter, ReentrancyGuard {
     ///      stored exchange rate. `exchangeRateCurrent()` is a state-mutating call disguised as a
     ///      getter — routing through it once, mid-withdraw, fans out to an IRM that on custom-IRM
     ///      markets has historically enabled reentrancy. `nonReentrant` is the belt-and-braces guard.
+    ///      Audit B19: snapshot the collateral balance before `redeemUnderlying` and require the
+    ///      delta equals the requested amount. A fee-on-transfer or rebasing underlying would
+    ///      deliver less (or more) than `amount`, at which point downstream accounting (surplus
+    ///      sweep, flash-loan repay) would silently drift. Revert `UnsupportedTokenBehavior` so
+    ///      the trigger fails loudly instead.
     function withdrawCollateral(
         address user,
         address collateralAsset,
@@ -107,7 +112,10 @@ contract CompoundV2Adapter is IProtocolAdapter, ReentrancyGuard {
         uint256 cTokenAmount = (amount * 1e18 + exchangeRate - 1) / exchangeRate;
 
         IERC20(address(CTOKEN)).safeTransferFrom(user, address(this), cTokenAmount);
+        uint256 balanceBefore = IERC20(collateralAsset).balanceOf(address(this));
         CTOKEN.redeemUnderlying(amount);
+        uint256 received = IERC20(collateralAsset).balanceOf(address(this)) - balanceBefore;
+        if (received != amount) revert SepehrErrors.UnsupportedTokenBehavior(collateralAsset);
         IERC20(collateralAsset).safeTransfer(recipient, amount);
     }
 

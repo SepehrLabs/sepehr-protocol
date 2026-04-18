@@ -20,6 +20,7 @@ library SepehrErrors {
     error ImplausibleHealthFactor(uint256 hf, uint256 floor);
     error DebtAssetMismatch(address expected, address provided);
     error CollateralAssetMismatch(address expected, address provided);
+    error UnsupportedTokenBehavior(address token);
 
     error SubscriptionExpired();
     error SubscriptionNotFound();

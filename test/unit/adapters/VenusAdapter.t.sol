@@ -5,6 +5,7 @@ import {VenusAdapter} from "../../../src/adapters/VenusAdapter.sol";
 import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockCToken, MockCompoundOracle, MockComptroller} from "../../helpers/MockCompoundV2.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
+import {MockFeeOnTransferERC20} from "../../helpers/MockFeeOnTransferERC20.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract VenusAdapterTest is Test {
@@ -139,6 +140,29 @@ contract VenusAdapterTest is Test {
 
         assertEq(vToken.lastRedeemAmount(), withdrawAmount);
         assertEq(underlying.balanceOf(recipient), withdrawAmount);
+    }
+
+    function test_withdrawCollateral_revertsOnFeeOnTransferUnderlying() public {
+        // Audit B19: Venus lists several BSC stablecoins whose governance could flip on a fee;
+        // adapter must revert rather than deliver less than `amount` to the recipient.
+        MockFeeOnTransferERC20 fotUnderlying = new MockFeeOnTransferERC20("FOT", "FOT", 50); // 0.5% fee
+        MockCToken fotVToken = new MockCToken("vFOT", "vFOT", address(fotUnderlying));
+        VenusAdapter fotAdapter = new VenusAdapter(address(comptroller), address(fotVToken), core);
+
+        uint256 exchangeRate = 1e18;
+        fotVToken.setExchangeRate(exchangeRate);
+
+        uint256 withdrawAmount = 10e18;
+        uint256 expectedVAmount = (withdrawAmount * 1e18 + exchangeRate - 1) / exchangeRate;
+
+        fotVToken.mint(user, expectedVAmount);
+        vm.prank(user);
+        fotVToken.approve(address(fotAdapter), expectedVAmount);
+        fotUnderlying.mint(address(fotVToken), withdrawAmount * 2);
+
+        vm.prank(core);
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.UnsupportedTokenBehavior.selector, address(fotUnderlying)));
+        fotAdapter.withdrawCollateral(user, address(fotUnderlying), withdrawAmount, recipient);
     }
 
     function test_getCollateralValueUsd_calculatesCorrectly() public {

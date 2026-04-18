@@ -5,6 +5,7 @@ import {MoonwellAdapter} from "../../../src/adapters/MoonwellAdapter.sol";
 import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockCToken, MockCompoundOracle, MockComptroller} from "../../helpers/MockCompoundV2.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
+import {MockFeeOnTransferERC20} from "../../helpers/MockFeeOnTransferERC20.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract MoonwellAdapterTest is Test {
@@ -137,6 +138,29 @@ contract MoonwellAdapterTest is Test {
         adapter.withdrawCollateral(user, address(underlying), withdrawAmount, recipient);
 
         assertEq(underlying.balanceOf(recipient), withdrawAmount);
+    }
+
+    function test_withdrawCollateral_revertsOnFeeOnTransferUnderlying() public {
+        // Audit B19: FoT underlying must trigger the balance-delta guard, reverting
+        // `UnsupportedTokenBehavior` instead of a cryptic SafeERC20 underflow.
+        MockFeeOnTransferERC20 fotUnderlying = new MockFeeOnTransferERC20("FOT", "FOT", 25); // 0.25% fee
+        MockCToken fotMToken = new MockCToken("mFOT", "mFOT", address(fotUnderlying));
+        MoonwellAdapter fotAdapter = new MoonwellAdapter(address(comptroller), address(fotMToken), core);
+
+        uint256 exchangeRate = 1e18;
+        fotMToken.setExchangeRate(exchangeRate);
+
+        uint256 withdrawAmount = 10e18;
+        uint256 expectedMAmount = (withdrawAmount * 1e18 + exchangeRate - 1) / exchangeRate;
+
+        fotMToken.mint(user, expectedMAmount);
+        vm.prank(user);
+        fotMToken.approve(address(fotAdapter), expectedMAmount);
+        fotUnderlying.mint(address(fotMToken), withdrawAmount * 2);
+
+        vm.prank(core);
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.UnsupportedTokenBehavior.selector, address(fotUnderlying)));
+        fotAdapter.withdrawCollateral(user, address(fotUnderlying), withdrawAmount, recipient);
     }
 
     function test_getCollateralValueUsd_calculatesCorrectly() public {

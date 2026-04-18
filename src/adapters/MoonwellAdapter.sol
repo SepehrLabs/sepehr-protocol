@@ -88,6 +88,9 @@ contract MoonwellAdapter is IProtocolAdapter, ReentrancyGuard {
     /// @inheritdoc IProtocolAdapter
     /// @dev Audit B16: explicit `accrueInterest()` + `exchangeRateStored()` in place of
     ///      `exchangeRateCurrent()` (state-mutating), plus `nonReentrant` as belt-and-braces.
+    ///      Audit B19: balance-delta guard around `redeemUnderlying` — a fee-on-transfer or
+    ///      rebasing underlying would desync `amount` from the actual tokens delivered to the
+    ///      adapter; revert `UnsupportedTokenBehavior` instead of letting the trigger drift.
     function withdrawCollateral(
         address user,
         address collateralAsset,
@@ -102,7 +105,10 @@ contract MoonwellAdapter is IProtocolAdapter, ReentrancyGuard {
         uint256 mTokenAmount = (amount * 1e18 + exchangeRate - 1) / exchangeRate;
 
         IERC20(address(MTOKEN)).safeTransferFrom(user, address(this), mTokenAmount);
+        uint256 balanceBefore = IERC20(collateralAsset).balanceOf(address(this));
         MTOKEN.redeemUnderlying(amount);
+        uint256 received = IERC20(collateralAsset).balanceOf(address(this)) - balanceBefore;
+        if (received != amount) revert SepehrErrors.UnsupportedTokenBehavior(collateralAsset);
         IERC20(collateralAsset).safeTransfer(recipient, amount);
     }
 

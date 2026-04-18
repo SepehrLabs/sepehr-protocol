@@ -92,6 +92,10 @@ contract VenusAdapter is IProtocolAdapter, ReentrancyGuard {
     /// @dev Audit B16: explicit `accrueInterest()` + `exchangeRateStored()` in place of the
     ///      state-mutating `exchangeRateCurrent()`, plus `nonReentrant` to blunt any IRM-callback
     ///      reentrancy vector on non-stock Venus markets.
+    ///      Audit B19: require the balance delta after `redeemUnderlying` to equal the requested
+    ///      amount. Venus lists several stablecoins on BSC whose governance could in theory turn
+    ///      on a transfer fee — any such drift would silently break the surplus sweep and the
+    ///      flash-loan repay, so revert `UnsupportedTokenBehavior` rather than continue.
     function withdrawCollateral(
         address user,
         address collateralAsset,
@@ -106,7 +110,10 @@ contract VenusAdapter is IProtocolAdapter, ReentrancyGuard {
         uint256 vTokenAmount = (amount * 1e18 + exchangeRate - 1) / exchangeRate;
 
         IERC20(address(VTOKEN)).safeTransferFrom(user, address(this), vTokenAmount);
+        uint256 balanceBefore = IERC20(collateralAsset).balanceOf(address(this));
         VTOKEN.redeemUnderlying(amount);
+        uint256 received = IERC20(collateralAsset).balanceOf(address(this)) - balanceBefore;
+        if (received != amount) revert SepehrErrors.UnsupportedTokenBehavior(collateralAsset);
         IERC20(collateralAsset).safeTransfer(recipient, amount);
     }
 
