@@ -86,7 +86,7 @@ contract SepehrCoreTriggersTest is Test {
         adapter.setDelegation(alice, true);
 
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY, THRESHOLD_HF, 500, 2500);
+        core.enableProtection(PROTOCOL_KEY, THRESHOLD_HF, 250, 2500);
 
         adapter.setHealthFactor(alice, HF_BELOW_THRESHOLD);
 
@@ -115,7 +115,7 @@ contract SepehrCoreTriggersTest is Test {
         core.addAdapter(seqKey, address(seqAdapter));
 
         vm.prank(alice);
-        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
         address[] memory providers = _buildFlashProviders();
 
@@ -154,7 +154,7 @@ contract SepehrCoreTriggersTest is Test {
         core.addAdapter(seqKey, address(seqAdapter));
 
         vm.prank(alice);
-        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
         address[] memory providers = _buildFlashProviders();
 
@@ -184,7 +184,7 @@ contract SepehrCoreTriggersTest is Test {
         core.addAdapter(seqKey, address(seqAdapter));
 
         vm.prank(alice);
-        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
         address[] memory providers = _buildFlashProviders();
 
@@ -234,7 +234,7 @@ contract SepehrCoreTriggersTest is Test {
         core.addAdapter(seqKey, address(seqAdapter));
 
         vm.prank(alice);
-        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
         address[] memory providers = _buildFlashProviders();
 
@@ -264,7 +264,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(timelock);
         core.addAdapter(seqKey, address(seqAdapter));
         vm.prank(alice);
-        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
         address[] memory providers = _buildFlashProviders();
 
@@ -294,7 +294,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(timelock);
         core.addAdapter(seqKey, address(seqAdapter));
         vm.prank(alice);
-        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
         address[] memory providers = _buildFlashProviders();
 
@@ -337,7 +337,7 @@ contract SepehrCoreTriggersTest is Test {
         core.addAdapter(seqKey, address(seqAdapter));
 
         vm.prank(bob);
-        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
         address[] memory providers = _buildFlashProviders();
 
@@ -434,7 +434,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(timelock);
         core.addAdapter(seqKey, address(seqAdapter));
         vm.prank(alice);
-        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
         address[] memory providers = _buildFlashProviders();
 
@@ -478,7 +478,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(timelock);
         core.addAdapter(seqKey, address(seqAdapter));
         vm.prank(alice);
-        core.enableProtection(seqKey, THRESHOLD_HF, 500, 2500);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
         address[] memory providers = _buildFlashProviders();
 

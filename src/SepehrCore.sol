@@ -23,7 +23,12 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     // ─── Constants ───────────────────────────────────────────────
     uint256 public constant MIN_HF_THRESHOLD = 1.2e18;
     uint256 public constant MAX_REPAY_BPS = 5000;
-    uint256 public constant MAX_SLIPPAGE_BPS = 2000;
+    /// @notice Maximum slippage a user may configure for collateral→debt swaps during triggers.
+    /// @dev Capped at 3% because the swap route and router are keeper-controlled: wider caps
+    /// permit a keeper to sandwich their own trigger and capture the difference as MEV. 3% is
+    /// the industry-typical upper bound for distressed-position swaps; above this, the keeper
+    /// should simulate with a tighter bound off-chain.
+    uint256 public constant MAX_SLIPPAGE_BPS = 300;
     uint256 public constant COOLDOWN_SECONDS = 3600;
     uint256 public constant MONTHLY_PERIOD = 30 days;
     uint256 public constant ANNUAL_PERIOD = 365 days;
@@ -178,11 +183,33 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     }
 
     /// @inheritdoc ISepehrCore
+    /// @dev H25: on early cancellation we refund the pro-rata unused portion of the remaining
+    /// subscription in USDC. Previously an `unsubscribe` simply deleted the record and the user
+    /// forfeited all prepaid time — equivalent to a silent penalty for cancelling. Refunds are
+    /// bounded by the outstanding `ownerFeeBalances[USDC]` so the protocol can never over-pay if
+    /// the treasury has already been drained via `withdrawOwnerFees`. Titan grants (tier 4) are
+    /// owner-gifted and therefore never refunded.
     function unsubscribe() external override nonReentrant {
         Subscription storage sub = _subscriptions[msg.sender];
         if (sub.tier == 0) revert SepehrErrors.SubscriptionNotFound();
 
+        uint256 refund;
+        if (sub.tier != 4 && sub.expiresAt > block.timestamp) {
+            uint256 remaining = sub.expiresAt - block.timestamp;
+            uint256 duration = sub.annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
+            uint256 price =
+                sub.annual ? TIER_PRICES_ANNUAL_USD_6[sub.tier - 1] : TIER_PRICES_MONTHLY_USD_6[sub.tier - 1];
+            refund = (price * remaining) / duration;
+            uint256 avail = ownerFeeBalances[address(usdc)];
+            if (refund > avail) refund = avail;
+            if (refund > 0) ownerFeeBalances[address(usdc)] -= refund;
+        }
+
         delete _subscriptions[msg.sender];
+
+        if (refund > 0) {
+            usdc.safeTransfer(msg.sender, refund);
+        }
         emit SepehrEvents.Unsubscribed(msg.sender);
     }
 
@@ -304,13 +331,23 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             userFeeBps
         );
 
-        _activeSessionHash = keccak256(callbackData);
+        // H28: bind the callback session not just to the payload hash but also to the asset and
+        // amount the flash-loan provider is expected to deliver. A malicious whitelisted provider
+        // that tried to invoke onFlashLoan with a different asset/amount than execute() requested
+        // would fail the equality check below.
+        _activeSessionHash = keccak256(abi.encode(keccak256(callbackData), debtAsset, repayAmount));
         _borrowFlashLoan(flashProviders, debtAsset, repayAmount, callbackData);
         _activeSessionHash = bytes32(0);
 
         uint256 hfAfter = entry.adapter.getHealthFactor(user);
         if (hfAfter < prot.thresholdHF) {
             revert SepehrErrors.PostExecutionHFBelowThreshold(hfAfter, prot.thresholdHF);
+        }
+        // H09: require strict HF improvement. A trigger that leaves HF unchanged (or regressed
+        // due to a stale adapter price cache) is ineffective, and charging fees for a no-op would
+        // constitute unjust enrichment of keeper + owner at the user's expense.
+        if (hfAfter <= hfBefore) {
+            revert SepehrErrors.HealthFactorNotImproved(hfBefore, hfAfter);
         }
 
         uint256 totalFee = Percentages.applyBps(repayAmount, userFeeBps);
@@ -341,9 +378,18 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         if (msg.sender != _activeFlashProvider) {
             revert SepehrErrors.InvalidFlashLoanCallback();
         }
-        if (keccak256(data) != _activeSessionHash) {
+        // H28: session hash binds the payload AND the (asset, amount) pair so a whitelisted but
+        // misbehaving provider cannot substitute arguments mid-flight.
+        bytes32 expectedHash = keccak256(abi.encode(keccak256(data), asset, amount));
+        if (expectedHash != _activeSessionHash) {
             revert SepehrErrors.InvalidFlashLoanCallback();
         }
+        // H06: consume the session immediately. A nested re-entry into onFlashLoan (via a
+        // misbehaving adapter or DEX router that calls back into us) would see a zero session
+        // hash and revert. execute() already re-zeroes these after `_borrowFlashLoan`, so
+        // double-clearing is safe.
+        _activeFlashProvider = address(0);
+        _activeSessionHash = bytes32(0);
 
         (
             address user,
@@ -366,15 +412,34 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         adapter.withdrawCollateral(user, collateralAsset, collateralNeeded, address(this));
 
         if (collateralAsset != debtAsset) {
+            // H23: `minOut` is the exact amount needed to repay the flash loan. It is passed
+            // directly to the router so the router's own min-out check enforces the floor. The
+            // previous code computed `minOutWithSlippage = minOut - slippage`, passed that to
+            // the router, then re-asserted on the un-slipped `minOut` — double-deducting the
+            // slippage margin and making the user-supplied `maxSlippageBps` effectively
+            // unreachable. `maxSlippageBps` is silenced intentionally here; it is still
+            // validated in _validateProtectionParams (bounded by MAX_SLIPPAGE_BPS) so that an
+            // upcoming off-chain price-oracle check can consume it. See H23 in the audit.
+            maxSlippageBps;
             uint256 minOut = repayAmount + fee;
-            uint256 minOutWithSlippage = minOut - Percentages.applyBps(minOut, maxSlippageBps);
-
             IERC20(collateralAsset).safeIncreaseAllowance(dexRouter, collateralNeeded);
-            uint256 received = IDexRouter(dexRouter)
-                .swap(collateralAsset, debtAsset, collateralNeeded, minOutWithSlippage, dexRouteData);
+            uint256 received =
+                IDexRouter(dexRouter).swap(collateralAsset, debtAsset, collateralNeeded, minOut, dexRouteData);
+            // H07: zero the allowance after the swap so a residual approval cannot be drained
+            // later if the router holds onto it. forceApprove handles tokens that require the
+            // allowance to be reset to zero before being changed.
+            IERC20(collateralAsset).forceApprove(dexRouter, 0);
 
             if (received < minOut) {
                 revert SepehrErrors.SlippageExceeded(received, minOut);
+            }
+            // H10: if the swap returns more than needed to repay the flash loan, sweep the
+            // surplus into owner fees so the protocol captures positive MEV instead of leaving
+            // it idle in the contract (where it would be uncredited and unrecoverable via the
+            // per-asset owner-fee withdraw path).
+            uint256 surplus = received - minOut;
+            if (surplus > 0) {
+                ownerFeeBalances[debtAsset] += surplus;
             }
         }
 
@@ -541,6 +606,15 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         if (msg.sender != owner()) revert SepehrErrors.NotOwner();
         if (user == address(0)) revert SepehrErrors.ZeroAddress();
         if (durationSeconds == 0) revert SepehrErrors.ZeroAmount();
+
+        // Refuse to overwrite an active paid subscription. A Titan grant could otherwise wipe a
+        // still-valid Shield/Guardian/Watchtower period without refund (owner griefing risk), or
+        // even silently extend a compromised account's cap. The user must first `unsubscribe`
+        // if they want to move off a paid plan onto a Titan grant.
+        Subscription storage existing = _subscriptions[user];
+        if (existing.tier != 0 && existing.tier != 4 && existing.expiresAt > block.timestamp) {
+            revert SepehrErrors.SubscriptionAlreadyActive();
+        }
 
         _subscriptions[user] = Subscription({
             tier: 4, annual: false, expiresAt: block.timestamp + durationSeconds, collateralValueUsdSnapshot: 0
