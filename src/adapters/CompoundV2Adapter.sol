@@ -92,4 +92,15 @@ contract CompoundV2Adapter is IProtocolAdapter {
         uint256 underlyingBalance = cTokenBalance * exchangeRate / 1e18;
         usdValue = underlyingBalance * price / 1e18;
     }
+
+    /// @inheritdoc IProtocolAdapter
+    /// @dev Returns the stored (not accrued) borrow balance on this cToken; 0 if
+    ///      `debtAsset` is not the cToken's underlying.
+    function getDebt(
+        address user,
+        address debtAsset
+    ) external view returns (uint256 debt) {
+        if (debtAsset != CTOKEN.underlying()) return 0;
+        return CTOKEN.borrowBalanceStored(user);
+    }
 }

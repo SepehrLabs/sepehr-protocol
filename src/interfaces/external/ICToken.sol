@@ -20,6 +20,10 @@ interface ICToken {
         address account
     ) external returns (uint256);
 
+    function borrowBalanceStored(
+        address account
+    ) external view returns (uint256);
+
     function underlying() external view returns (address);
 
     function exchangeRateCurrent() external returns (uint256);

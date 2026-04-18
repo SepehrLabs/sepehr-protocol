@@ -93,4 +93,15 @@ contract MoonwellAdapter is IProtocolAdapter {
         uint256 underlyingBalance = mTokenBalance * exchangeRate / 1e18;
         usdValue = underlyingBalance * price / 1e18;
     }
+
+    /// @inheritdoc IProtocolAdapter
+    /// @dev Returns the stored (not accrued) borrow balance on this mToken; 0 if
+    ///      `debtAsset` is not the mToken's underlying.
+    function getDebt(
+        address user,
+        address debtAsset
+    ) external view returns (uint256 debt) {
+        if (debtAsset != MTOKEN.underlying()) return 0;
+        return MTOKEN.borrowBalanceStored(user);
+    }
 }

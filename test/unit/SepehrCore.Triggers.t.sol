@@ -734,4 +734,11 @@ contract SequentialMockAdapter {
     ) external pure returns (uint256) {
         return 10_000e8; // $10k — below Shield tier cap ($15k) so execute() passes H01 check
     }
+
+    function getDebt(
+        address,
+        address
+    ) external pure returns (uint256) {
+        return 0;
+    }
 }

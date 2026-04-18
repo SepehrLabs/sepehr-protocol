@@ -107,4 +107,16 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
         // Return stablecoin value as the floor (8 decimals).
         return (stablecoin + collateral) / 1e10;
     }
+
+    /// @inheritdoc IProtocolAdapter
+    /// @dev Reads LLAMMA's `user_state` (index 2 = debt). Returns 0 unless `debtAsset` matches
+    ///      the controller's borrowed token (crvUSD on mainnet).
+    function getDebt(
+        address user,
+        address debtAsset
+    ) external view returns (uint256 debt) {
+        if (debtAsset != CONTROLLER.borrowed_token()) return 0;
+        uint256[4] memory state = CONTROLLER.user_state(user);
+        return state[2];
+    }
 }

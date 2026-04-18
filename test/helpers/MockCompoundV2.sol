@@ -72,6 +72,8 @@ contract MockCToken is ERC20, ICToken {
     address private _underlying;
     uint256 private _exchangeRate;
 
+    mapping(address => uint256) private _borrowBalance;
+
     address public lastRepayBorrower;
     uint256 public lastRepayAmount;
     uint256 public lastRedeemAmount;
@@ -147,5 +149,18 @@ contract MockCToken is ERC20, ICToken {
         address
     ) external pure returns (uint256) {
         return 0;
+    }
+
+    function setBorrowBalance(
+        address borrower,
+        uint256 amount
+    ) external {
+        _borrowBalance[borrower] = amount;
+    }
+
+    function borrowBalanceStored(
+        address account
+    ) external view returns (uint256) {
+        return _borrowBalance[account];
     }
 }

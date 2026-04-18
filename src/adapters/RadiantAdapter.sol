@@ -81,4 +81,15 @@ contract RadiantAdapter is IProtocolAdapter {
     ) external view returns (uint256 usdValue) {
         (usdValue,,,,,) = POOL.getUserAccountData(user);
     }
+
+    /// @inheritdoc IProtocolAdapter
+    /// @dev Radiant reuses the Aave V2/V3 reserve layout; reads the variable debt token balance.
+    function getDebt(
+        address user,
+        address debtAsset
+    ) external view returns (uint256 debt) {
+        (,,,,,,,,,, address variableDebtToken,,,,) = POOL.getReserveData(debtAsset);
+        if (variableDebtToken == address(0)) return 0;
+        return IERC20(variableDebtToken).balanceOf(user);
+    }
 }

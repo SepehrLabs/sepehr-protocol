@@ -103,4 +103,20 @@ contract MorphoBlueAdapter is IProtocolAdapter {
         uint256 oraclePrice = IMorphoOracle(params.oracle).price();
         usdValue = uint256(pos.collateral) * oraclePrice / 1e36;
     }
+
+    /// @inheritdoc IProtocolAdapter
+    /// @dev Converts the user's borrow shares to assets via the market's totals; 0 if the
+    ///      market has no debt or `debtAsset` is not this market's loan token.
+    function getDebt(
+        address user,
+        address debtAsset
+    ) external view returns (uint256 debt) {
+        IMorpho.MarketParams memory params = MORPHO.idToMarketParams(MARKET_ID);
+        if (debtAsset != params.loanToken) return 0;
+        IMorpho.Position memory pos = MORPHO.position(MARKET_ID, user);
+        if (pos.borrowShares == 0) return 0;
+        IMorpho.Market memory mkt = MORPHO.market(MARKET_ID);
+        if (mkt.totalBorrowShares == 0) return 0;
+        return uint256(pos.borrowShares) * uint256(mkt.totalBorrowAssets) / uint256(mkt.totalBorrowShares);
+    }
 }

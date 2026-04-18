@@ -79,4 +79,15 @@ contract AaveV3Adapter is IProtocolAdapter {
     ) external view returns (uint256 usdValue) {
         (usdValue,,,,,) = POOL.getUserAccountData(user);
     }
+
+    /// @inheritdoc IProtocolAdapter
+    /// @dev Reads the Aave V3 variable-rate debt token balance for `debtAsset`.
+    function getDebt(
+        address user,
+        address debtAsset
+    ) external view returns (uint256 debt) {
+        (,,,,,,,,,, address variableDebtToken,,,,) = POOL.getReserveData(debtAsset);
+        if (variableDebtToken == address(0)) return 0;
+        return IERC20(variableDebtToken).balanceOf(user);
+    }
 }

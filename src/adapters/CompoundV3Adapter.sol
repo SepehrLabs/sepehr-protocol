@@ -103,4 +103,14 @@ contract CompoundV3Adapter is IProtocolAdapter {
             usdValue += uint256(balance) * price / uint256(scale);
         }
     }
+
+    /// @inheritdoc IProtocolAdapter
+    /// @dev Comet has a single base (borrow) token; returns 0 if `debtAsset` is anything else.
+    function getDebt(
+        address user,
+        address debtAsset
+    ) external view returns (uint256 debt) {
+        if (debtAsset != COMET.baseToken()) return 0;
+        return COMET.borrowBalanceOf(user);
+    }
 }

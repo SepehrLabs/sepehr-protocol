@@ -8,6 +8,7 @@ contract MockAdapter is IProtocolAdapter {
     mapping(address => uint256) public healthFactors;
     mapping(address => bool) public delegations;
     mapping(address => uint256) public collateralValues;
+    mapping(address user => mapping(address asset => uint256)) public debts;
 
     uint256 public repayCallCount;
     uint256 public withdrawCallCount;
@@ -68,5 +69,20 @@ contract MockAdapter is IProtocolAdapter {
         address user
     ) external view override returns (uint256) {
         return collateralValues[user];
+    }
+
+    function setDebt(
+        address user,
+        address asset,
+        uint256 amount
+    ) external {
+        debts[user][asset] = amount;
+    }
+
+    function getDebt(
+        address user,
+        address debtAsset
+    ) external view override returns (uint256) {
+        return debts[user][debtAsset];
     }
 }

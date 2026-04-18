@@ -76,4 +76,15 @@ contract FluidAdapter is IProtocolAdapter {
     ) external view returns (uint256 usdValue) {
         return VAULT.getCollateralValueUsd(user);
     }
+
+    /// @inheritdoc IProtocolAdapter
+    /// @dev Returns 0 — Fluid is vault-per-borrow and the minimal IFluidVault surface does
+    ///      not expose a per-user debt reader; SepehrCore skips the percent check when 0 is
+    ///      returned.
+    function getDebt(
+        address, /* user */
+        address /* debtAsset */
+    ) external pure returns (uint256 debt) {
+        return 0;
+    }
 }

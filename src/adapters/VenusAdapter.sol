@@ -93,4 +93,15 @@ contract VenusAdapter is IProtocolAdapter {
         uint256 underlyingBalance = vTokenBalance * exchangeRate / 1e18;
         usdValue = underlyingBalance * price / 1e18;
     }
+
+    /// @inheritdoc IProtocolAdapter
+    /// @dev Returns the stored (not accrued) borrow balance on this vToken; 0 if
+    ///      `debtAsset` is not the vToken's underlying.
+    function getDebt(
+        address user,
+        address debtAsset
+    ) external view returns (uint256 debt) {
+        if (debtAsset != VTOKEN.underlying()) return 0;
+        return VTOKEN.borrowBalanceStored(user);
+    }
 }

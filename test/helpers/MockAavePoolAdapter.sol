@@ -32,6 +32,7 @@ contract MockAavePoolAdapter is IAavePool {
     IERC20 public immutable UNDERLYING;
 
     mapping(address => AccountData) private _accountData;
+    mapping(address => address) private _variableDebtToken;
 
     RepayCall[] public repayCalls;
     WithdrawCall[] public withdrawCalls;
@@ -141,11 +142,18 @@ contract MockAavePoolAdapter is IAavePool {
         return 0;
     }
 
+    function setVariableDebtToken(
+        address asset,
+        address variableDebtToken
+    ) external {
+        _variableDebtToken[asset] = variableDebtToken;
+    }
+
     function getReserveData(
-        address
+        address asset
     )
         external
-        pure
+        view
         override
         returns (
             uint256,
@@ -158,13 +166,14 @@ contract MockAavePoolAdapter is IAavePool {
             uint16,
             address,
             address,
-            address,
+            address variableDebtTokenAddress,
             address,
             uint128,
             uint128,
             uint128
         )
     {
-        revert("MockAavePoolAdapter: getReserveData not implemented");
+        variableDebtTokenAddress = _variableDebtToken[asset];
+        return (0, 0, 0, 0, 0, 0, 0, 0, address(0), address(0), variableDebtTokenAddress, address(0), 0, 0, 0);
     }
 }

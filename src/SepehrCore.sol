@@ -328,6 +328,23 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
         if (repayAmount == 0) revert SepehrErrors.ZeroAmount();
 
+        // H02: enforce the user's `repayPercentBps` limit. The user constrains how much of their
+        // outstanding debt Sepehr may close in a single trigger (e.g. "never touch more than
+        // 25% at once"), which protects them from a keeper that over-repays and drains their
+        // position. `getDebt` may return 0 for adapters that cannot read debt in a single call
+        // (Fluid's per-vault model, etc.); in that case we short-circuit the percent check —
+        // the flash loan + adapter.repay() would still fail on any amount exceeding true debt,
+        // but the percent-of-debt guarantee is downgraded to "whatever the protocol permits".
+        {
+            uint256 userDebt = entry.adapter.getDebt(user, debtAsset);
+            if (userDebt != 0) {
+                uint256 allowed = (userDebt * prot.repayPercentBps) / 10_000;
+                if (repayAmount > allowed) {
+                    revert SepehrErrors.RepayExceedsUserLimit(repayAmount, allowed);
+                }
+            }
+        }
+
         if (!allowedDexRouters[dexRouter]) revert SepehrErrors.NotAuthorized();
 
         lastTriggerTime[user] = block.timestamp;

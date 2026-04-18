@@ -127,4 +127,16 @@ contract GearboxAdapter is IProtocolAdapter {
             CREDIT_MANAGER.calcDebtAndCollateral(creditAccount, TASK_FULL_COLLATERAL_CHECK);
         return totalValueUSD;
     }
+
+    /// @inheritdoc IProtocolAdapter
+    /// @dev Returns the credit account's total debt in the credit manager's underlying.
+    ///      `debtAsset` is ignored because Gearbox credit accounts borrow only the underlying.
+    function getDebt(
+        address user,
+        address /* debtAsset */
+    ) external view returns (uint256 debt) {
+        address creditAccount = CREDIT_MANAGER.creditAccounts(user);
+        if (creditAccount == address(0)) return 0;
+        (debt,,,,,,,) = CREDIT_MANAGER.calcDebtAndCollateral(creditAccount, TASK_FULL_COLLATERAL_CHECK);
+    }
 }

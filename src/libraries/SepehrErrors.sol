@@ -13,6 +13,7 @@ library SepehrErrors {
     error CooldownActive(uint256 remaining);
     error HealthFactorAboveThreshold(uint256 current, uint256 threshold);
     error MaxRepayExceeded(uint256 requested, uint256 maxAllowed);
+    error RepayExceedsUserLimit(uint256 requested, uint256 allowed);
     error SlippageExceeded(uint256 actualOut, uint256 minExpected);
     error PostExecutionHFBelowThreshold(uint256 hfAfter, uint256 threshold);
     error HealthFactorNotImproved(uint256 hfBefore, uint256 hfAfter);
