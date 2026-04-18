@@ -32,21 +32,25 @@ contract DeployPeripherals is Script {
     }
 
     function _deployFlashProviders() internal {
+        // C10: flash providers expose an owner-gated `sweep` for accidentally-donated
+        // tokens. The timelock (via SEPEHR_OWNER) owns them; deployer is never owner.
+        address owner = vm.envAddress("SEPEHR_OWNER");
+
         address aavePool = vm.envOr("AAVE_POOL", address(0));
         if (aavePool != address(0)) {
-            AaveFlashLoanProvider aaveFlash = new AaveFlashLoanProvider(aavePool);
+            AaveFlashLoanProvider aaveFlash = new AaveFlashLoanProvider(aavePool, owner);
             console.log("AaveFlashLoanProvider:", address(aaveFlash));
         }
 
         address balancerVault = vm.envOr("BALANCER_VAULT", address(0));
         if (balancerVault != address(0)) {
-            BalancerFlashLoanProvider balancerFlash = new BalancerFlashLoanProvider(balancerVault);
+            BalancerFlashLoanProvider balancerFlash = new BalancerFlashLoanProvider(balancerVault, owner);
             console.log("BalancerFlashLoanProvider:", address(balancerFlash));
         }
 
         address uniV3Pool = vm.envOr("UNIV3_FLASH_POOL", address(0));
         if (uniV3Pool != address(0)) {
-            UniswapV3FlashLoanProvider uniFlash = new UniswapV3FlashLoanProvider(uniV3Pool);
+            UniswapV3FlashLoanProvider uniFlash = new UniswapV3FlashLoanProvider(uniV3Pool, owner);
             console.log("UniswapV3FlashLoanProvider:", address(uniFlash));
         }
     }

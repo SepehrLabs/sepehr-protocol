@@ -19,6 +19,7 @@ contract UniswapV3FlashLoanProviderTest is Test {
     uint24 constant POOL_FEE = 3000; // 0.3% = 30 bps
     uint256 constant POOL_LIQUIDITY = 1_000_000e18;
     uint256 constant BORROW_AMOUNT = 100e18;
+    address constant OWNER = address(0xA11CE);
 
     function setUp() public {
         tokenA = new MockERC20("WETH", "WETH");
@@ -27,7 +28,7 @@ contract UniswapV3FlashLoanProviderTest is Test {
         callback = new SimpleCallback();
 
         pool = new MockUniswapV3Pool(address(tokenA), address(tokenB), POOL_FEE);
-        provider = new UniswapV3FlashLoanProvider(address(pool));
+        provider = new UniswapV3FlashLoanProvider(address(pool), OWNER);
 
         tokenA.mint(address(pool), POOL_LIQUIDITY);
         tokenB.mint(address(pool), POOL_LIQUIDITY);
@@ -39,9 +40,13 @@ contract UniswapV3FlashLoanProviderTest is Test {
         assertEq(address(provider.POOL()), address(pool));
     }
 
+    function test_constructor_setsOwner() public view {
+        assertEq(provider.owner(), OWNER);
+    }
+
     function test_constructor_revertsOnZeroAddress() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new UniswapV3FlashLoanProvider(address(0));
+        new UniswapV3FlashLoanProvider(address(0), OWNER);
     }
 
     // ── flashBorrow token0 ───────────────────────────────────────────────
@@ -127,33 +132,33 @@ contract UniswapV3FlashLoanProviderTest is Test {
 
     function test_getFlashLoanFeeBps_500feeTier() public {
         MockUniswapV3Pool pool500 = new MockUniswapV3Pool(address(tokenA), address(tokenB), 500);
-        UniswapV3FlashLoanProvider provider500 = new UniswapV3FlashLoanProvider(address(pool500));
+        UniswapV3FlashLoanProvider provider500 = new UniswapV3FlashLoanProvider(address(pool500), OWNER);
         assertEq(provider500.getFlashLoanFeeBps(address(tokenA)), 5);
     }
 
     function test_getFlashLoanFeeBps_10000feeTier() public {
         MockUniswapV3Pool pool10k = new MockUniswapV3Pool(address(tokenA), address(tokenB), 10_000);
-        UniswapV3FlashLoanProvider provider10k = new UniswapV3FlashLoanProvider(address(pool10k));
+        UniswapV3FlashLoanProvider provider10k = new UniswapV3FlashLoanProvider(address(pool10k), OWNER);
         assertEq(provider10k.getFlashLoanFeeBps(address(tokenA)), 100);
     }
 
     function test_getFlashLoanFeeBps_100feeTier() public {
         MockUniswapV3Pool pool100 = new MockUniswapV3Pool(address(tokenA), address(tokenB), 100);
-        UniswapV3FlashLoanProvider provider100 = new UniswapV3FlashLoanProvider(address(pool100));
+        UniswapV3FlashLoanProvider provider100 = new UniswapV3FlashLoanProvider(address(pool100), OWNER);
         assertEq(provider100.getFlashLoanFeeBps(address(tokenA)), 1);
     }
 
     // C4: non-canonical fee tiers must revert rather than silently rounding.
     function test_getFlashLoanFeeBps_revertsOnNonCanonicalFee() public {
         MockUniswapV3Pool oddPool = new MockUniswapV3Pool(address(tokenA), address(tokenB), 450);
-        UniswapV3FlashLoanProvider oddProvider = new UniswapV3FlashLoanProvider(address(oddPool));
+        UniswapV3FlashLoanProvider oddProvider = new UniswapV3FlashLoanProvider(address(oddPool), OWNER);
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.UnsupportedPoolFee.selector, uint24(450)));
         oddProvider.getFlashLoanFeeBps(address(tokenA));
     }
 
     function test_getFlashLoanFeeBps_revertsOnZeroDynamicFee() public {
         MockUniswapV3Pool zeroPool = new MockUniswapV3Pool(address(tokenA), address(tokenB), 0);
-        UniswapV3FlashLoanProvider zeroProvider = new UniswapV3FlashLoanProvider(address(zeroPool));
+        UniswapV3FlashLoanProvider zeroProvider = new UniswapV3FlashLoanProvider(address(zeroPool), OWNER);
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.UnsupportedPoolFee.selector, uint24(0)));
         zeroProvider.getFlashLoanFeeBps(address(tokenA));
     }
@@ -197,6 +202,33 @@ contract UniswapV3FlashLoanProviderTest is Test {
         assertFalse(provider.isAvailable(address(tokenA), BORROW_AMOUNT));
         pool.setUnlocked(true);
         assertTrue(provider.isAvailable(address(tokenA), BORROW_AMOUNT));
+    }
+
+    // ── C10: sweep ───────────────────────────────────────────────────────
+
+    function test_sweep_ownerRecoversDonatedTokens() public {
+        uint256 donation = 42e18;
+        tokenC.mint(address(provider), donation);
+
+        address recipient = address(0xBEEF);
+        vm.prank(OWNER);
+        provider.sweep(address(tokenC), recipient);
+
+        assertEq(tokenC.balanceOf(address(provider)), 0);
+        assertEq(tokenC.balanceOf(recipient), donation);
+    }
+
+    function test_sweep_revertsWhenNotOwner() public {
+        tokenC.mint(address(provider), 1e18);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", address(this)));
+        provider.sweep(address(tokenC), address(0xBEEF));
+    }
+
+    function test_sweep_revertsOnZeroRecipient() public {
+        tokenC.mint(address(provider), 1e18);
+        vm.prank(OWNER);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        provider.sweep(address(tokenC), address(0));
     }
 
     // ── Fuzz ─────────────────────────────────────────────────────────────

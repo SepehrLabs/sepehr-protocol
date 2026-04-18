@@ -49,7 +49,7 @@ contract AaveFlashLoanForkTest is ForkTestBase {
         _forked = _tryCreateFork("RPC_ETHEREUM_PRIMARY_HTTP");
         if (!_forked) return;
 
-        provider = new AaveFlashLoanProvider(AAVE_V3_POOL);
+        provider = new AaveFlashLoanProvider(AAVE_V3_POOL, address(this));
         repayer = new FlashLoanRepayer();
     }
 
@@ -112,7 +112,7 @@ contract BalancerFlashLoanForkTest is ForkTestBase {
         _forked = _tryCreateFork("RPC_ETHEREUM_PRIMARY_HTTP");
         if (!_forked) return;
 
-        provider = new BalancerFlashLoanProvider(BALANCER_VAULT);
+        provider = new BalancerFlashLoanProvider(BALANCER_VAULT, address(this));
         repayer = new FlashLoanRepayer();
     }
 
@@ -169,7 +169,7 @@ contract UniswapV3FlashLoanForkTest is ForkTestBase {
         _forked = _tryCreateFork("RPC_ETHEREUM_PRIMARY_HTTP");
         if (!_forked) return;
 
-        provider = new UniswapV3FlashLoanProvider(USDC_WETH_POOL);
+        provider = new UniswapV3FlashLoanProvider(USDC_WETH_POOL, address(this));
         repayer = new FlashLoanRepayer();
     }
 

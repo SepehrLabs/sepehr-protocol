@@ -21,11 +21,17 @@ interface IDexRouter {
         bytes calldata routeData
     ) external returns (uint256 amountOut);
 
-    /// @notice Get a quote for swapping `amountIn` of `tokenIn` to `tokenOut`.
+    /// @notice Get a spot-price quote for swapping `amountIn` of `tokenIn` to `tokenOut`.
+    /// @dev ADVISORY ONLY. Returns the instantaneous spot price of the underlying pool, which is
+    ///      trivially manipulable within the same block (flash-loan sandwich, JIT liquidity, etc.).
+    ///      Do NOT use the return value as an on-chain `minAmountOut` floor or any other
+    ///      trust-sensitive input. SepehrCore derives `minAmountOut` from the Chainlink oracle
+    ///      registry (`_oracleMinOut`), not from `getQuote`. Callers wanting a price feed for
+    ///      on-chain logic must read a TWAP or an independent oracle.
     /// @param tokenIn The input token.
     /// @param tokenOut The output token.
     /// @param amountIn The amount of input token.
-    /// @return amountOut The expected output amount.
+    /// @return amountOut The expected output amount at current spot price (manipulable).
     function getQuote(
         address tokenIn,
         address tokenOut,

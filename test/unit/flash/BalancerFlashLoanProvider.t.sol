@@ -21,13 +21,14 @@ contract BalancerFlashLoanProviderTest is Test {
 
     uint256 constant VAULT_LIQUIDITY = 1_000_000e18;
     uint256 constant BORROW_AMOUNT = 100e18;
+    address constant OWNER = address(0xA11CE);
 
     function setUp() public {
         feesCollector = new MockBalancerFeesCollector();
         vault = new MockBalancerVault(address(feesCollector));
         token = new MockERC20("DAI", "DAI");
         callback = new SimpleCallback();
-        provider = new BalancerFlashLoanProvider(address(vault));
+        provider = new BalancerFlashLoanProvider(address(vault), OWNER);
 
         token.mint(address(vault), VAULT_LIQUIDITY);
     }
@@ -38,9 +39,13 @@ contract BalancerFlashLoanProviderTest is Test {
         assertEq(address(provider.VAULT()), address(vault));
     }
 
+    function test_constructor_setsOwner() public view {
+        assertEq(provider.owner(), OWNER);
+    }
+
     function test_constructor_revertsOnZeroAddress() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new BalancerFlashLoanProvider(address(0));
+        new BalancerFlashLoanProvider(address(0), OWNER);
     }
 
     // ── flashBorrow ──────────────────────────────────────────────────────
@@ -106,7 +111,7 @@ contract BalancerFlashLoanProviderTest is Test {
         // must not desynchronise the callback. The provider should bound
         // tokens.length == 1 and revert otherwise.
         MaliciousBalancerVault badVault = new MaliciousBalancerVault(address(feesCollector));
-        BalancerFlashLoanProvider badProvider = new BalancerFlashLoanProvider(address(badVault));
+        BalancerFlashLoanProvider badProvider = new BalancerFlashLoanProvider(address(badVault), OWNER);
         token.mint(address(badVault), VAULT_LIQUIDITY);
 
         vm.expectRevert(SepehrErrors.InvalidFlashLoanCallback.selector);
@@ -169,6 +174,33 @@ contract BalancerFlashLoanProviderTest is Test {
 
     function test_isAvailable_falseWhenInsufficientLiquidity() public view {
         assertFalse(provider.isAvailable(address(token), VAULT_LIQUIDITY + 1));
+    }
+
+    // ── C10: sweep ───────────────────────────────────────────────────────
+
+    function test_sweep_ownerRecoversDonatedTokens() public {
+        uint256 donation = 42e18;
+        token.mint(address(provider), donation);
+
+        address recipient = address(0xBEEF);
+        vm.prank(OWNER);
+        provider.sweep(address(token), recipient);
+
+        assertEq(token.balanceOf(address(provider)), 0);
+        assertEq(token.balanceOf(recipient), donation);
+    }
+
+    function test_sweep_revertsWhenNotOwner() public {
+        token.mint(address(provider), 1e18);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", address(this)));
+        provider.sweep(address(token), address(0xBEEF));
+    }
+
+    function test_sweep_revertsOnZeroRecipient() public {
+        token.mint(address(provider), 1e18);
+        vm.prank(OWNER);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        provider.sweep(address(token), address(0));
     }
 
     // ── Fuzz ─────────────────────────────────────────────────────────────

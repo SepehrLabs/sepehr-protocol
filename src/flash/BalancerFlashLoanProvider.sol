@@ -5,6 +5,7 @@ import {IFlashLoanProvider} from "../interfaces/IFlashLoanProvider.sol";
 import {ISepehrCallback} from "../interfaces/ISepehrCallback.sol";
 import {IBalancerFeesCollector, IBalancerVault} from "../interfaces/external/IBalancerVault.sol";
 import {SepehrErrors} from "../libraries/SepehrErrors.sol";
+import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -14,7 +15,9 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 /// @dev C7: callbacks use `nonReentrant` as defense-in-depth on top of the
 ///      msg.sender/initiator checks — a compromised Vault cannot cause re-entrant
 ///      dispatch into Sepehr callbacks via this provider.
-contract BalancerFlashLoanProvider is IFlashLoanProvider, ReentrancyGuard {
+///      C10: owner-only `sweep` recovers tokens accidentally donated to the provider;
+///      blocked while a flash loan is in flight.
+contract BalancerFlashLoanProvider is IFlashLoanProvider, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IBalancerVault public immutable VAULT;
@@ -23,10 +26,27 @@ contract BalancerFlashLoanProvider is IFlashLoanProvider, ReentrancyGuard {
     bytes private _activeData;
 
     constructor(
-        address vault
-    ) {
+        address vault,
+        address owner_
+    ) Ownable(owner_) {
         if (vault == address(0)) revert SepehrErrors.ZeroAddress();
         VAULT = IBalancerVault(vault);
+    }
+
+    /// @notice Sweep a non-essential token balance to `to`.
+    /// @dev C10: recovers tokens accidentally donated to the provider. Blocked while
+    ///      a flash loan is live so the owner cannot siphon principal/fee mid-callback.
+    /// @param token The ERC20 to sweep.
+    /// @param to The recipient.
+    function sweep(
+        address token,
+        address to
+    ) external onlyOwner {
+        if (to == address(0)) revert SepehrErrors.ZeroAddress();
+        if (_activeCallback != address(0)) revert SepehrErrors.ConcurrentFlashLoan();
+        uint256 bal = IERC20(token).balanceOf(address(this));
+        if (bal == 0) return;
+        IERC20(token).safeTransfer(to, bal);
     }
 
     /// @inheritdoc IFlashLoanProvider

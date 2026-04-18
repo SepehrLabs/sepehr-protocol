@@ -5,6 +5,7 @@ import {IFlashLoanProvider} from "../interfaces/IFlashLoanProvider.sol";
 import {ISepehrCallback} from "../interfaces/ISepehrCallback.sol";
 import {IAavePool} from "../interfaces/external/IAavePool.sol";
 import {SepehrErrors} from "../libraries/SepehrErrors.sol";
+import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -14,7 +15,10 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 /// @dev C7: `executeOperation` uses `nonReentrant` as defense-in-depth on top of
 ///      the msg.sender/initiator checks — a compromised Pool cannot cause re-entrant
 ///      dispatch into Sepehr callbacks via this provider.
-contract AaveFlashLoanProvider is IFlashLoanProvider, ReentrancyGuard {
+///      C10: owner-only `sweep` recovers tokens accidentally donated to the provider;
+///      blocked while a flash loan is in flight so the owner cannot siphon the
+///      principal/fee mid-callback.
+contract AaveFlashLoanProvider is IFlashLoanProvider, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IAavePool public immutable POOL;
@@ -23,10 +27,28 @@ contract AaveFlashLoanProvider is IFlashLoanProvider, ReentrancyGuard {
     bytes private _activeData;
 
     constructor(
-        address pool
-    ) {
+        address pool,
+        address owner_
+    ) Ownable(owner_) {
         if (pool == address(0)) revert SepehrErrors.ZeroAddress();
         POOL = IAavePool(pool);
+    }
+
+    /// @notice Sweep a non-essential token balance to `to`.
+    /// @dev C10: guards against accidentally-donated tokens being permanently locked.
+    ///      Blocked while `_activeCallback != address(0)` so an (already trusted) owner
+    ///      still cannot race a live flash loan and take the principal.
+    /// @param token The ERC20 to sweep.
+    /// @param to The recipient.
+    function sweep(
+        address token,
+        address to
+    ) external onlyOwner {
+        if (to == address(0)) revert SepehrErrors.ZeroAddress();
+        if (_activeCallback != address(0)) revert SepehrErrors.ConcurrentFlashLoan();
+        uint256 bal = IERC20(token).balanceOf(address(this));
+        if (bal == 0) return;
+        IERC20(token).safeTransfer(to, bal);
     }
 
     /// @inheritdoc IFlashLoanProvider

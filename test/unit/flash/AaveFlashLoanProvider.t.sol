@@ -17,12 +17,13 @@ contract AaveFlashLoanProviderTest is Test {
 
     uint256 constant POOL_LIQUIDITY = 1_000_000e18;
     uint256 constant BORROW_AMOUNT = 100e18;
+    address constant OWNER = address(0xA11CE);
 
     function setUp() public {
         pool = new MockAavePool();
         token = new MockERC20("USDC", "USDC");
         callback = new SimpleCallback();
-        provider = new AaveFlashLoanProvider(address(pool));
+        provider = new AaveFlashLoanProvider(address(pool), OWNER);
 
         token.mint(address(pool), POOL_LIQUIDITY);
     }
@@ -33,9 +34,13 @@ contract AaveFlashLoanProviderTest is Test {
         assertEq(address(provider.POOL()), address(pool));
     }
 
+    function test_constructor_setsOwner() public view {
+        assertEq(provider.owner(), OWNER);
+    }
+
     function test_constructor_revertsOnZeroAddress() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new AaveFlashLoanProvider(address(0));
+        new AaveFlashLoanProvider(address(0), OWNER);
     }
 
     // ── flashBorrow ──────────────────────────────────────────────────────
@@ -144,6 +149,40 @@ contract AaveFlashLoanProviderTest is Test {
 
         vm.expectRevert();
         provider.flashBorrow(address(token), BORROW_AMOUNT, address(callback), "");
+    }
+
+    // ── C10: sweep ───────────────────────────────────────────────────────
+
+    function test_sweep_ownerRecoversDonatedTokens() public {
+        uint256 donation = 42e18;
+        token.mint(address(provider), donation);
+
+        address recipient = address(0xBEEF);
+        vm.prank(OWNER);
+        provider.sweep(address(token), recipient);
+
+        assertEq(token.balanceOf(address(provider)), 0);
+        assertEq(token.balanceOf(recipient), donation);
+    }
+
+    function test_sweep_noopOnZeroBalance() public {
+        address recipient = address(0xBEEF);
+        vm.prank(OWNER);
+        provider.sweep(address(token), recipient);
+        assertEq(token.balanceOf(recipient), 0);
+    }
+
+    function test_sweep_revertsOnZeroRecipient() public {
+        token.mint(address(provider), 1e18);
+        vm.prank(OWNER);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        provider.sweep(address(token), address(0));
+    }
+
+    function test_sweep_revertsWhenNotOwner() public {
+        token.mint(address(provider), 1e18);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", address(this)));
+        provider.sweep(address(token), address(0xBEEF));
     }
 
     // ── Fuzz ─────────────────────────────────────────────────────────────
