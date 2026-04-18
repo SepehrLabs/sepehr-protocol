@@ -33,6 +33,7 @@ library SepehrErrors {
     error RepayPercentTooHigh(uint256 bps, uint256 maxBps);
     error InvalidSlippage(uint256 bps);
     error TierFeeBpsTooHigh(uint256 bps, uint256 maxBps);
+    error TierPriceDeviationTooLarge(uint256 oldPrice, uint256 newPrice);
 
     error AdapterNotRegistered(bytes32 protocolKey);
     error AdapterAlreadyRegistered(bytes32 protocolKey);

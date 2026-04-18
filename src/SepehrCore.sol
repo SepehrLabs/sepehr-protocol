@@ -43,6 +43,14 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// migration rather than a parameter tweak.
     uint256 public constant MAX_TIER_FEE_BPS = 100;
 
+    /// @notice A13: hard ceiling on a single tier-price change, expressed in basis points of
+    /// the previous price. Blocks a compromised / hasty timelock proposal from retro-pricing a
+    /// tier to ~0 or 100× in one call — either would silently harm existing subscribers (refund
+    /// math and upgrade credits are pro-rated against the current price). 5000 bps (±50%) lets
+    /// governance track USDC depegs or genuine cost changes while forcing a pathological move
+    /// to span multiple 48h-delayed proposals (giving subscribers time to unsubscribe in between).
+    uint256 public constant MAX_TIER_PRICE_DEVIATION_BPS = 5000;
+
     /// @notice Maximum duration a single `pause()` call may freeze the contract. A11: without an
     /// auto-expiry a compromised owner/guardian key can permanently censor protections; the
     /// contract must eventually un-freeze itself so users can at least unsubscribe and call
@@ -806,6 +814,39 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.TierFeeBpsUpdated(tier, old, newBps);
     }
 
+    /// @notice Update the USDC-6 price of a tier for either the monthly or annual schedule.
+    /// @dev Timelock-gated. A13: tier prices were previously immutable, leaving the protocol
+    /// unable to respond to a USDC depeg or genuine cost change. Each call is bounded by
+    /// `MAX_TIER_PRICE_DEVIATION_BPS` (±50%) so a pathological move requires multiple 48h-delayed
+    /// proposals. Tier 4 (Titan) is owner-granted, not priced, so only tiers 1–3 are mutable.
+    /// Pro-rata math in `unsubscribe` and `upgradeTier` always reads the live price, so in-flight
+    /// subscriptions refund/credit against whatever price was current at cancellation.
+    /// @param tier Tier index in [1, 3]; reverts on 0 or ≥4.
+    /// @param annual `true` to update the annual price, `false` for monthly.
+    /// @param newPrice Replacement price in USDC-6 units; must be within
+    /// `[oldPrice * (10_000 - MAX_TIER_PRICE_DEVIATION_BPS)/10_000,
+    ///   oldPrice * (10_000 + MAX_TIER_PRICE_DEVIATION_BPS)/10_000]`.
+    function setTierPrice(
+        uint8 tier,
+        bool annual,
+        uint256 newPrice
+    ) external onlyTimelock {
+        if (tier == 0 || tier >= 4) revert SepehrErrors.InvalidTier();
+        if (newPrice == 0) revert SepehrErrors.ZeroAmount();
+        uint256 old = annual ? TIER_PRICES_ANNUAL_USD_6[tier - 1] : TIER_PRICES_MONTHLY_USD_6[tier - 1];
+        uint256 minAllowed = (old * (10_000 - MAX_TIER_PRICE_DEVIATION_BPS)) / 10_000;
+        uint256 maxAllowed = (old * (10_000 + MAX_TIER_PRICE_DEVIATION_BPS)) / 10_000;
+        if (newPrice < minAllowed || newPrice > maxAllowed) {
+            revert SepehrErrors.TierPriceDeviationTooLarge(old, newPrice);
+        }
+        if (annual) {
+            TIER_PRICES_ANNUAL_USD_6[tier - 1] = newPrice;
+        } else {
+            TIER_PRICES_MONTHLY_USD_6[tier - 1] = newPrice;
+        }
+        emit SepehrEvents.TierPriceUpdated(tier, annual, old, newPrice);
+    }
+
     /// @notice Update the minimum USD-8 collateral required to enable protection.
     /// @dev Timelock-gated. Setting to 0 disables the gate entirely (useful for dev/test or
     /// emergency relief). A7: previously dead state; now enforced in `enableProtection`.
@@ -878,15 +919,19 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     ) external onlyTimelock {
         if (router == address(0)) revert SepehrErrors.ZeroAddress();
         allowedDexRouters[router] = true;
+        emit SepehrEvents.DexRouterAdded(router);
     }
 
     /// @notice Remove a DEX router from the whitelist.
     /// @dev Timelock-gated. Executions that specify a delisted router in `dexRouter` will revert.
+    /// A14: emits `DexRouterRemoved` so off-chain monitors can detect the delisting — earlier
+    /// versions silently updated the mapping, which diverged from every other admin function.
     /// @param router Address to delist.
     function removeDexRouter(
         address router
     ) external onlyTimelock {
         allowedDexRouters[router] = false;
+        emit SepehrEvents.DexRouterRemoved(router);
     }
 
     /// @notice D1/D4: register a canonical `routeData` blob for a `(router, tokenIn, tokenOut)`
@@ -1149,7 +1194,15 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             try provider.flashBorrow(asset, amount, address(this), data) {
                 _activeFlashProvider = address(0);
                 return;
-            } catch {
+            } catch (bytes memory reason) {
+                // A17: surface the raw revert data so a failing provider (wrong asset, oracle
+                // stale, callback hash mismatch, …) is diagnosable from logs. The legacy
+                // behavior silently discarded `reason` and fell through to the next provider,
+                // making multi-provider fallbacks impossible to debug without replaying each
+                // call manually. Indexers can decode selectors from `reason` to classify root
+                // causes (e.g. `SepehrErrors.InvalidFlashLoanCallback` indicates session-hash
+                // drift rather than upstream-liquidity shortage).
+                emit SepehrEvents.FlashAttemptFailed(providers[i], reason);
                 _activeFlashProvider = address(0);
                 continue;
             }

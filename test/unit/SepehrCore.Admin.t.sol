@@ -280,6 +280,83 @@ contract SepehrCoreAdminTest is Test {
         assertEq(core.TIER_FEE_BPS(1), max);
     }
 
+    // ─── A13: setTierPrice ──────────────────────────────────────
+
+    function test_setTierPrice_monthly_happyPath() public {
+        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(0);
+        uint256 newPrice = old + 1_000_000; // $1 bump
+        vm.prank(timelock);
+        core.setTierPrice(1, false, newPrice);
+        assertEq(core.TIER_PRICES_MONTHLY_USD_6(0), newPrice);
+    }
+
+    function test_setTierPrice_annual_happyPath() public {
+        uint256 old = core.TIER_PRICES_ANNUAL_USD_6(1);
+        uint256 newPrice = old - 10_000_000; // $10 discount
+        vm.prank(timelock);
+        core.setTierPrice(2, true, newPrice);
+        assertEq(core.TIER_PRICES_ANNUAL_USD_6(1), newPrice);
+    }
+
+    function test_setTierPrice_emitsEvent() public {
+        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(2);
+        uint256 newPrice = old + 5_000_000;
+        vm.expectEmit(true, false, false, true, address(core));
+        emit SepehrEvents.TierPriceUpdated(3, false, old, newPrice);
+        vm.prank(timelock);
+        core.setTierPrice(3, false, newPrice);
+    }
+
+    function test_setTierPrice_revertsOnNonTimelock() public {
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
+        core.setTierPrice(1, false, 10_000_000);
+    }
+
+    function test_setTierPrice_revertsOnTierZero() public {
+        vm.expectRevert(SepehrErrors.InvalidTier.selector);
+        vm.prank(timelock);
+        core.setTierPrice(0, false, 10_000_000);
+    }
+
+    function test_setTierPrice_revertsOnTierFour() public {
+        vm.expectRevert(SepehrErrors.InvalidTier.selector);
+        vm.prank(timelock);
+        core.setTierPrice(4, false, 10_000_000);
+    }
+
+    function test_setTierPrice_revertsOnZeroPrice() public {
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
+        vm.prank(timelock);
+        core.setTierPrice(1, false, 0);
+    }
+
+    function test_setTierPrice_revertsOnAboveMaxDeviation() public {
+        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(0);
+        uint256 cap = core.MAX_TIER_PRICE_DEVIATION_BPS();
+        uint256 tooHigh = (old * (10_000 + cap)) / 10_000 + 1;
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.TierPriceDeviationTooLarge.selector, old, tooHigh));
+        vm.prank(timelock);
+        core.setTierPrice(1, false, tooHigh);
+    }
+
+    function test_setTierPrice_revertsOnBelowMinDeviation() public {
+        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(1);
+        uint256 cap = core.MAX_TIER_PRICE_DEVIATION_BPS();
+        uint256 tooLow = (old * (10_000 - cap)) / 10_000 - 1;
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.TierPriceDeviationTooLarge.selector, old, tooLow));
+        vm.prank(timelock);
+        core.setTierPrice(2, false, tooLow);
+    }
+
+    function test_setTierPrice_allowsExactlyMaxDeviation() public {
+        uint256 old = core.TIER_PRICES_ANNUAL_USD_6(2);
+        uint256 cap = core.MAX_TIER_PRICE_DEVIATION_BPS();
+        uint256 maxAllowed = (old * (10_000 + cap)) / 10_000;
+        vm.prank(timelock);
+        core.setTierPrice(3, true, maxAllowed);
+        assertEq(core.TIER_PRICES_ANNUAL_USD_6(2), maxAllowed);
+    }
+
     // ─── pause ──────────────────────────────────────────────────
 
     function test_pause_byGuardian() public {
@@ -473,6 +550,27 @@ contract SepehrCoreAdminTest is Test {
         core.removeDexRouter(router);
 
         assertFalse(core.allowedDexRouters(router));
+    }
+
+    /// @dev A14: add emits DexRouterAdded so off-chain monitors can detect whitelist changes.
+    function test_addDexRouter_emitsEvent() public {
+        address router = makeAddr("router-a");
+        vm.expectEmit(true, false, false, false, address(core));
+        emit SepehrEvents.DexRouterAdded(router);
+        vm.prank(timelock);
+        core.addDexRouter(router);
+    }
+
+    /// @dev A14: remove emits DexRouterRemoved.
+    function test_removeDexRouter_emitsEvent() public {
+        address router = makeAddr("router-r");
+        vm.prank(timelock);
+        core.addDexRouter(router);
+
+        vm.expectEmit(true, false, false, false, address(core));
+        emit SepehrEvents.DexRouterRemoved(router);
+        vm.prank(timelock);
+        core.removeDexRouter(router);
     }
 
     // ─── setAdapterEnabled ──────────────────────────────────────

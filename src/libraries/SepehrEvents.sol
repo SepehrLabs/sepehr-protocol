@@ -45,6 +45,10 @@ library SepehrEvents {
     event KeeperFeesWithdrawn(address indexed keeper, address indexed asset, uint256 amount);
     event TierFeeBpsUpdated(uint8 indexed tier, uint256 oldBps, uint256 newBps);
     event MinCollateralUsdUpdated(uint256 oldMin, uint256 newMin);
+    /// @notice A13: emitted when the timelock updates a tier's subscription price. `annual`
+    /// discriminates monthly (`false`) vs annual (`true`) schedule so off-chain indexers can
+    /// reconstruct either curve without extra state.
+    event TierPriceUpdated(uint8 indexed tier, bool annual, uint256 oldPrice, uint256 newPrice);
 
     // ─── Admin ───────────────────────────────────────────────────
     event AdapterAdded(bytes32 indexed protocolKey, address adapter);
@@ -55,6 +59,12 @@ library SepehrEvents {
     event KeeperRemoved(address indexed keeper);
     event FlashLoanProviderAdded(address indexed provider);
     event FlashLoanProviderRemoved(address indexed provider);
+    /// @notice A17: emitted when a whitelisted flash-loan provider reverts during `flashBorrow`
+    /// inside `_borrowFlashLoan`. Surfaces the provider-side revert data that `try/catch` would
+    /// otherwise swallow, making misconfigurations diagnosable without re-triggering the failure.
+    event FlashAttemptFailed(address indexed provider, bytes reason);
+    event DexRouterAdded(address indexed router);
+    event DexRouterRemoved(address indexed router);
     event PauseGuardianUpdated(address indexed oldGuardian, address indexed newGuardian);
     event CanonicalRouteSet(address indexed router, address indexed tokenIn, address indexed tokenOut, bytes data);
     event CanonicalRouteCleared(address indexed router, address indexed tokenIn, address indexed tokenOut);

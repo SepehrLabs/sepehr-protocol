@@ -663,6 +663,35 @@ contract SepehrCoreTriggersTest is Test {
         );
     }
 
+    /// @dev A17: a provider that reports `isAvailable == true` but reverts inside `flashBorrow`
+    /// triggers the `catch (bytes memory reason)` path; `_borrowFlashLoan` must emit
+    /// `FlashAttemptFailed(provider, reason)` with the exact upstream revert bytes before
+    /// falling through and ultimately reverting with `NoFlashLoanAvailable`.
+    function test_execute_emitsFlashAttemptFailedOnProviderRevert() public {
+        adapter.setHealthFactor(alice, HF_BELOW_THRESHOLD);
+
+        bytes memory reason = abi.encodeWithSignature("Error(string)", "oracle-stale");
+        flashLoan.setRevertOnFlashBorrow(true, reason);
+
+        address[] memory providers = _buildFlashProviders();
+
+        vm.expectEmit(true, false, false, true, address(core));
+        emit SepehrEvents.FlashAttemptFailed(address(flashLoan), reason);
+        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            PROTOCOL_KEY,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+    }
+
     function test_execute_revertsOnZeroRepayAmount() public {
         adapter.setHealthFactor(alice, HF_BELOW_THRESHOLD);
         address[] memory providers = _buildFlashProviders();
