@@ -38,6 +38,7 @@ library SepehrErrors {
     error InvalidSlippage(uint256 bps);
     error TierFeeBpsTooHigh(uint256 bps, uint256 maxBps);
     error TierPriceDeviationTooLarge(uint256 oldPrice, uint256 newPrice);
+    error TierPriceCooldown(uint256 lastUpdate, uint256 nextAllowed);
 
     error AdapterNotRegistered(bytes32 protocolKey);
     error AdapterAlreadyRegistered(bytes32 protocolKey);

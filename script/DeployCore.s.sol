@@ -30,6 +30,12 @@ contract DeployCore is Script {
         SepehrCore core = new SepehrCore(owner, address(timelock), pauseGuardian, usdcAddress, minCollateralUsd);
         console.log("SepehrCore deployed at:", address(core));
 
+        // M3: freeze the strict-canonical-routes default post-deploy. A fresh deploy MUST
+        // leave it off so trigger flow keeps working while governance seeds the route
+        // registry; enabling strict mode at the same time as deploy would brick every
+        // trigger until the canonical-route mapping is populated.
+        require(!core.strictCanonicalRoutes(), "DeployCore: strictCanonicalRoutes must default to false");
+
         vm.stopBroadcast();
     }
 }

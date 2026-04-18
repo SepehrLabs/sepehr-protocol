@@ -60,6 +60,14 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// to span multiple 48h-delayed proposals (giving subscribers time to unsubscribe in between).
     uint256 public constant MAX_TIER_PRICE_DEVIATION_BPS = 5000;
 
+    /// @notice M1: minimum interval between successive `setTierPrice` calls for the same
+    /// (tier, annual) key. Combined with `MAX_TIER_PRICE_DEVIATION_BPS` (±50%) and the 48h
+    /// timelock, this prevents governance from compounding two back-to-back 50% cuts within
+    /// one 96h window (would total a 75% price drop and retro-harm prepaid annual subscribers).
+    /// 7 days gives affected subscribers a full week between any two consecutive price shifts
+    /// to exit via `unsubscribe` (which pro-rates against the *current* price).
+    uint256 public constant TIER_PRICE_UPDATE_COOLDOWN = 7 days;
+
     /// @notice Maximum duration a single `pause()` call may freeze the contract. A11: without an
     /// auto-expiry a compromised owner/guardian key can permanently censor protections; the
     /// contract must eventually un-freeze itself so users can at least unsubscribe and call
@@ -72,6 +80,13 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// oracle-floor check (a long-dead feed would still be "fresh"). One day is the longest
     /// heartbeat among Chainlink's mainstream USD feeds (stablecoin pairs), so capping at
     /// 1 day rejects obviously-insecure configurations without breaking legitimate ones.
+    ///
+    /// Deploy policy (H4): the contract exposes a *ceiling* — individual per-asset values are
+    /// expected to be **much tighter** in production. Volatile majors (ETH/USD, BTC/USD,
+    /// WBTC/USD) must be configured with `maxStaleness <= 1 hours` because their Chainlink
+    /// heartbeats are 3600s; only stablecoin feeds (USDC/USD, USDT/USD, DAI/USD) with
+    /// legitimately-slow 86400s heartbeats should be registered anywhere near the ceiling.
+    /// The `setAssetOracle` ingress is timelock-gated, so the 48h delay is the second defence.
     uint256 public constant MAX_ORACLE_STALENESS = 1 days;
     /// @notice D2: required decimals for every registered Chainlink aggregator. Chainlink's
     /// USD-denominated feeds are 8-decimal; enforcing this at registration time lets the
@@ -137,6 +152,13 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// the `(router, collateralAsset, debtAsset)` triple. Defaults to `false` so the
     /// registry can be rolled out pair-by-pair without breaking triggers on already-
     /// live pairs; governance can flip the flag once the registry is populated.
+    ///
+    /// Deploy policy (M3): new deployments MUST leave this as `false` at construction so
+    /// the initial trigger path keeps working while the canonical-route registry is
+    /// seeded. The deploy script asserts this default post-deploy, and
+    /// `test_strictCanonicalRoutes_defaultIsOff` freezes the invariant in unit tests.
+    /// Governance is expected to flip it to `true` via `setStrictCanonicalRoutes` only
+    /// after the registry is fully populated.
     /// Governance is expected to flip it to `true` via `setStrictCanonicalRoutes` only
     /// after the registry is fully populated.
     bool public strictCanonicalRoutes;
@@ -187,6 +209,11 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     mapping(address keeper => mapping(address asset => uint256 amount)) public keeperFeeBalances;
 
     mapping(address => uint256) public saveCredits;
+
+    /// @notice M1: last `block.timestamp` at which `setTierPrice` mutated a given
+    /// (tier, annual) key. Packed into a single slot per key; read/written inside the
+    /// cooldown check below.
+    mapping(uint8 tier => mapping(bool annual => uint256 lastUpdatedAt)) public tierPriceLastUpdatedAt;
 
     address private _activeFlashProvider;
     bytes32 private _activeSessionHash;
@@ -584,9 +611,19 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         // keeper. When no debt-asset oracle is registered, we credit 0 (conservative) — the
         // trigger still succeeds so protection is not gated on oracle coverage, but the
         // user-facing "money saved" metric only accrues when it can be verified on-chain.
+        //
+        // M2: cap the per-user save-credit total at type(uint128).max (USDC-6 units, so
+        // ~3.4e32 USDC). Far above any realistic career-long cumulative protection for a
+        // single wallet, but keeps UI-side scaling predictable and forecloses a silent
+        // overflow path if an attacker could ever contrive an oracle that reports an
+        // astronomically large debt-asset price.
         uint256 repayValueUsd6 = _computeRepayValueUsd6(debtAsset, repayAmount);
         if (repayValueUsd6 > 0) {
-            saveCredits[user] += repayValueUsd6;
+            uint256 newTotal = saveCredits[user] + repayValueUsd6;
+            if (newTotal > type(uint128).max) {
+                newTotal = type(uint128).max;
+            }
+            saveCredits[user] = newTotal;
         }
 
         emit SepehrEvents.Triggered(user, protocolKey, msg.sender, repayAmount, 0, hfBefore, hfAfter, totalFee);
@@ -901,6 +938,19 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         if (tier == 0 || tier >= 4) revert SepehrErrors.InvalidTier();
         if (newPrice == 0) revert SepehrErrors.ZeroAmount();
 
+        // M1: enforce a minimum interval between successive changes for this (tier, annual) key.
+        // Without the cooldown, two back-to-back 50% cuts inside one 96h window (two timelock
+        // cycles) could compound to a 75% drop and retro-harm prepaid annual subscribers. The
+        // check is skipped for the first-ever call (lastUpdate == 0) so deployment-time
+        // parameter adjustments remain possible.
+        uint256 lastUpdate = tierPriceLastUpdatedAt[tier][annual];
+        if (lastUpdate != 0) {
+            uint256 nextAllowed = lastUpdate + TIER_PRICE_UPDATE_COOLDOWN;
+            if (block.timestamp < nextAllowed) {
+                revert SepehrErrors.TierPriceCooldown(lastUpdate, nextAllowed);
+            }
+        }
+
         uint256 old = annual ? TIER_PRICES_ANNUAL_USD_6[tier - 1] : TIER_PRICES_MONTHLY_USD_6[tier - 1];
         uint256 minAllowed = (old * (10_000 - MAX_TIER_PRICE_DEVIATION_BPS)) / 10_000;
         uint256 maxAllowed = (old * (10_000 + MAX_TIER_PRICE_DEVIATION_BPS)) / 10_000;
@@ -912,6 +962,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         } else {
             TIER_PRICES_MONTHLY_USD_6[tier - 1] = newPrice;
         }
+        tierPriceLastUpdatedAt[tier][annual] = block.timestamp;
         emit SepehrEvents.TierPriceUpdated(tier, annual, old, newPrice);
     }
 

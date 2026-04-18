@@ -357,6 +357,61 @@ contract SepehrCoreAdminTest is Test {
         assertEq(core.TIER_PRICES_ANNUAL_USD_6(2), maxAllowed);
     }
 
+    // ─── M1 · tier price cooldown ───────────────────────────────
+
+    function test_setTierPrice_firstCallSkipsCooldown() public {
+        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(0);
+        uint256 next = (old * 9000) / 10_000; // -10%
+        vm.prank(timelock);
+        core.setTierPrice(1, false, next);
+        assertEq(core.tierPriceLastUpdatedAt(1, false), block.timestamp);
+    }
+
+    function test_setTierPrice_revertsWhenInsideCooldown() public {
+        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(0);
+        uint256 first = (old * 9000) / 10_000;
+        vm.prank(timelock);
+        core.setTierPrice(1, false, first);
+
+        uint256 lastUpdate = core.tierPriceLastUpdatedAt(1, false);
+        uint256 nextAllowed = lastUpdate + core.TIER_PRICE_UPDATE_COOLDOWN();
+        vm.warp(nextAllowed - 1);
+
+        uint256 second = (first * 9000) / 10_000;
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.TierPriceCooldown.selector, lastUpdate, nextAllowed));
+        vm.prank(timelock);
+        core.setTierPrice(1, false, second);
+    }
+
+    function test_setTierPrice_allowsExactlyAtCooldownBoundary() public {
+        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(0);
+        uint256 first = (old * 9000) / 10_000;
+        vm.prank(timelock);
+        core.setTierPrice(1, false, first);
+
+        vm.warp(block.timestamp + core.TIER_PRICE_UPDATE_COOLDOWN());
+
+        uint256 second = (first * 9000) / 10_000;
+        vm.prank(timelock);
+        core.setTierPrice(1, false, second);
+        assertEq(core.TIER_PRICES_MONTHLY_USD_6(0), second);
+    }
+
+    function test_setTierPrice_cooldownIsPerKey() public {
+        // A cooldown set on (tier=1, monthly) must not block (tier=2, monthly) or (tier=1, annual).
+        uint256 oldM1 = core.TIER_PRICES_MONTHLY_USD_6(0);
+        vm.prank(timelock);
+        core.setTierPrice(1, false, (oldM1 * 9000) / 10_000);
+
+        uint256 oldM2 = core.TIER_PRICES_MONTHLY_USD_6(1);
+        vm.prank(timelock);
+        core.setTierPrice(2, false, (oldM2 * 9000) / 10_000);
+
+        uint256 oldA1 = core.TIER_PRICES_ANNUAL_USD_6(0);
+        vm.prank(timelock);
+        core.setTierPrice(1, true, (oldA1 * 9000) / 10_000);
+    }
+
     // ─── pause ──────────────────────────────────────────────────
 
     function test_pause_byGuardian() public {
@@ -845,6 +900,13 @@ contract SepehrCoreAdminTest is Test {
     function test_clearCanonicalRoute_revertsFromNonTimelock() public {
         vm.expectRevert(SepehrErrors.NotTimelock.selector);
         core.clearCanonicalRoute(makeAddr("r"), makeAddr("i"), makeAddr("o"));
+    }
+
+    /// @dev M3: freezes the deploy-time default. Flipping this to `true` at construction
+    /// would brick every trigger until the canonical-route registry is seeded, so the
+    /// deploy script also `require`s this is off post-deploy.
+    function test_strictCanonicalRoutes_defaultIsOff() public view {
+        assertFalse(core.strictCanonicalRoutes());
     }
 
     function test_setStrictCanonicalRoutes_togglesFlag() public {
