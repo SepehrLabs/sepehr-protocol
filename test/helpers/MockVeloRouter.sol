@@ -20,17 +20,25 @@ contract MockVeloRouter {
         address factory;
     }
 
+    address public lastFactory;
+    bool public lastStable;
+    uint256 public lastDeadline;
+
     function swapExactTokensForTokens(
         uint256 amountIn,
         uint256 amountOutMin,
         Route[] calldata routes,
         address to,
-        uint256
+        uint256 deadline
     ) external returns (uint256[] memory amounts) {
         IERC20(routes[0].from).transferFrom(msg.sender, address(this), amountIn);
         uint256 amountOut = (amountIn * exchangeRate) / 1e18;
         require(amountOut >= amountOutMin, "MockVelo: slippage");
         IERC20(routes[routes.length - 1].to).transfer(to, amountOut);
+
+        lastFactory = routes[0].factory;
+        lastStable = routes[0].stable;
+        lastDeadline = deadline;
 
         amounts = new uint256[](routes.length + 1);
         amounts[0] = amountIn;

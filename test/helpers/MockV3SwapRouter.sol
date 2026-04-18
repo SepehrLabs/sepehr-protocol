@@ -9,6 +9,7 @@ contract MockV3SwapRouter {
 
     uint160 public lastSqrtPriceLimitX96;
     uint24 public lastFee;
+    uint256 public lastDeadline;
 
     function setExchangeRate(
         uint256 rate
@@ -32,6 +33,7 @@ contract MockV3SwapRouter {
     ) external payable returns (uint256 amountOut) {
         lastSqrtPriceLimitX96 = params.sqrtPriceLimitX96;
         lastFee = params.fee;
+        lastDeadline = params.deadline;
         IERC20(params.tokenIn).transferFrom(msg.sender, address(this), params.amountIn);
         amountOut = (params.amountIn * exchangeRate) / 1e18;
         require(amountOut >= params.amountOutMinimum, "MockV3: slippage");

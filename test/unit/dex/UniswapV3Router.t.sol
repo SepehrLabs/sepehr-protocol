@@ -99,6 +99,21 @@ contract UniswapV3RouterTest is Test {
         router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, bogus);
     }
 
+    // D9: caller-supplied deadline (96-byte encoding) is forwarded to the SwapRouter.
+    function test_swap_forwardsDeadlineFromRouteData() public {
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        uint256 customDeadline = block.timestamp + 900;
+        uint160 customLimit = uint160(1 << 95);
+        bytes memory routeData = abi.encode(customDeadline, uint24(500), customLimit);
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, routeData);
+
+        assertEq(swapRouter.lastDeadline(), customDeadline, "deadline not forwarded");
+        assertEq(swapRouter.lastFee(), uint24(500), "fee not forwarded");
+        assertEq(swapRouter.lastSqrtPriceLimitX96(), customLimit, "sqrt limit not forwarded");
+    }
+
     function test_swap_revertsOnZeroAmount() public {
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         router.swap(address(tokenIn), address(tokenOut), 0, 0, "");

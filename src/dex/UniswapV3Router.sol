@@ -8,18 +8,22 @@ import {IUniswapV3Pool} from "../interfaces/external/IUniswapV3Pool.sol";
 import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title UniswapV3Router
 /// @notice Wraps Uniswap V3 SwapRouter behind the IDexRouter interface.
-///         routeData encoding:
-///           • empty → use DEFAULT_FEE, no sqrtPrice bound
-///           • `abi.encode(uint24 fee)` → custom fee, no sqrtPrice bound
-///           • `abi.encode(uint24 fee, uint160 sqrtPriceLimitX96)` → D3: bound the
-///             pool-side price movement. When wired through SepehrCore's canonical-
-///             route registry this becomes the only reachable code path (the keeper
-///             loses its ability to disable pool-side price protection with a 0).
-contract UniswapV3Router is IDexRouter {
+/// @dev routeData encoding (all accepted):
+///      - empty → DEFAULT_FEE, no sqrtPrice bound, deadline = block.timestamp
+///      - 32 bytes (uint24 fee) → custom fee, no sqrtPrice bound, deadline = block.timestamp
+///      - 64 bytes (uint24 fee, uint160 sqrtPriceLimitX96) → D3: bound pool-side price
+///        movement; deadline = block.timestamp
+///      - 96 bytes (uint256 deadline, uint24 fee, uint160 sqrtPriceLimitX96) → D9:
+///        caller-supplied deadline. When wired through SepehrCore's canonical-route
+///        registry this becomes the only reachable code path (the keeper loses its
+///        ability to disable pool-side price protection with a 0).
+///      D10: swap is `nonReentrant` as defense-in-depth on top of SepehrCore's guard.
+contract UniswapV3Router is IDexRouter, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     ISwapRouter public immutable SWAP_ROUTER;
@@ -44,15 +48,18 @@ contract UniswapV3Router is IDexRouter {
         uint256 amountIn,
         uint256 minAmountOut,
         bytes calldata routeData
-    ) external override returns (uint256 amountOut) {
+    ) external override nonReentrant returns (uint256 amountOut) {
         if (amountIn == 0) revert SepehrErrors.ZeroAmount();
 
         uint24 fee = DEFAULT_FEE;
         uint160 sqrtPriceLimitX96 = 0;
+        uint256 deadline = block.timestamp;
         if (routeData.length == 32) {
             fee = abi.decode(routeData, (uint24));
         } else if (routeData.length == 64) {
             (fee, sqrtPriceLimitX96) = abi.decode(routeData, (uint24, uint160));
+        } else if (routeData.length == 96) {
+            (deadline, fee, sqrtPriceLimitX96) = abi.decode(routeData, (uint256, uint24, uint160));
         } else if (routeData.length != 0) {
             revert SepehrErrors.InvalidRouteData();
         }
@@ -66,7 +73,7 @@ contract UniswapV3Router is IDexRouter {
                 tokenOut: tokenOut,
                 fee: fee,
                 recipient: msg.sender,
-                deadline: block.timestamp,
+                deadline: deadline,
                 amountIn: amountIn,
                 amountOutMinimum: minAmountOut,
                 sqrtPriceLimitX96: sqrtPriceLimitX96

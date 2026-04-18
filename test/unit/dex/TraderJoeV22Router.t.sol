@@ -127,4 +127,42 @@ contract TraderJoeV22RouterTest is Test {
         assertEq(tokenIn.balanceOf(address(router)), 0, "dust left behind in router");
         assertEq(tokenIn.balanceOf(address(this)), callerBefore - SWAP_AMOUNT + dust, "dust not swept to caller");
     }
+
+    // ── D8 + D9: per-call version + caller-supplied deadline ─────────────
+
+    function test_swap_overridesVersionAndDeadlineViaRouteData() public {
+        // D8: caller selects Version.V2_1 (ordinal 2) for deeper TJ pool liquidity.
+        // D9: caller-supplied deadline forwarded verbatim to the external router.
+        uint256 customDeadline = block.timestamp + 600;
+        uint8 v21 = 2;
+
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        bytes memory routeData = abi.encode(customDeadline, uint256(25), v21);
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, routeData);
+
+        assertEq(uint8(externalRouter.lastVersion()), v21, "version not forwarded");
+        assertEq(externalRouter.lastBinStep(), 25, "binStep not forwarded");
+        assertEq(externalRouter.lastDeadline(), customDeadline, "deadline not forwarded");
+    }
+
+    function test_swap_revertsOnInvalidVersion() public {
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        uint8 invalidVersion = 4;
+        bytes memory routeData = abi.encode(block.timestamp, uint256(25), invalidVersion);
+        vm.expectRevert(SepehrErrors.InvalidRouteData.selector);
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, routeData);
+    }
+
+    function test_swap_revertsOnMalformedRouteData() public {
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        bytes memory bogus = hex"deadbeef";
+        vm.expectRevert(SepehrErrors.InvalidRouteData.selector);
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, bogus);
+    }
 }

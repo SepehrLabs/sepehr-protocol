@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 contract MockCamelotExtRouter {
     uint256 public exchangeRate = 1e18;
     address public lastReferrer;
+    uint256 public lastDeadline;
 
     function setExchangeRate(
         uint256 rate
@@ -20,9 +21,10 @@ contract MockCamelotExtRouter {
         address[] calldata path,
         address to,
         address referrer,
-        uint256
+        uint256 deadline
     ) external returns (uint256[] memory amounts) {
         lastReferrer = referrer;
+        lastDeadline = deadline;
         IERC20(path[0]).transferFrom(msg.sender, address(this), amountIn);
         uint256 amountOut = (amountIn * exchangeRate) / 1e18;
         require(amountOut >= amountOutMin, "MockCamelot: slippage");

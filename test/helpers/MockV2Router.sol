@@ -13,17 +13,21 @@ contract MockV2Router {
         exchangeRate = rate;
     }
 
+    uint256 public lastDeadline;
+
     function swapExactTokensForTokens(
         uint256 amountIn,
         uint256 amountOutMin,
         address[] calldata path,
         address to,
-        uint256
+        uint256 deadline
     ) external returns (uint256[] memory amounts) {
         IERC20(path[0]).transferFrom(msg.sender, address(this), amountIn);
         uint256 amountOut = (amountIn * exchangeRate) / 1e18;
         require(amountOut >= amountOutMin, "MockV2: slippage");
         IERC20(path[path.length - 1]).transfer(to, amountOut);
+
+        lastDeadline = deadline;
 
         amounts = new uint256[](path.length);
         amounts[0] = amountIn;

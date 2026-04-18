@@ -6,11 +6,20 @@ import {IUniswapV2Router} from "../interfaces/external/IUniswapV2Router.sol";
 import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title UniV2ForkRouter
 /// @notice Wraps any Uniswap V2 fork router (SushiSwap, PancakeSwap, etc.) behind IDexRouter.
-///         routeData: unused (always direct tokenIn → tokenOut path).
-contract UniV2ForkRouter is IDexRouter {
+/// @dev routeData encoding:
+///      - empty → deadline defaults to block.timestamp (same-block tx, no validator-delay
+///        protection — acceptable inside SepehrCore's atomic execute path but the caller
+///        should prefer the explicit form below).
+///      - `abi.encode(uint256 deadline)` (32 bytes) → D9: caller-supplied deadline.
+///        The external router reverts if the tx is mined past this deadline, bounding a
+///        mempool-delay attack.
+///      D10: swap is `nonReentrant` as defense-in-depth; SepehrCore's own guard is the
+///      primary protection but future aggregator integrations may re-enter.
+contract UniV2ForkRouter is IDexRouter, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IUniswapV2Router public immutable ROUTER;
@@ -28,9 +37,11 @@ contract UniV2ForkRouter is IDexRouter {
         address tokenOut,
         uint256 amountIn,
         uint256 minAmountOut,
-        bytes calldata
-    ) external override returns (uint256 amountOut) {
+        bytes calldata routeData
+    ) external override nonReentrant returns (uint256 amountOut) {
         if (amountIn == 0) revert SepehrErrors.ZeroAmount();
+
+        uint256 deadline = _decodeDeadline(routeData);
 
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenIn).forceApprove(address(ROUTER), amountIn);
@@ -39,8 +50,7 @@ contract UniV2ForkRouter is IDexRouter {
         path[0] = tokenIn;
         path[1] = tokenOut;
 
-        uint256[] memory amounts =
-            ROUTER.swapExactTokensForTokens(amountIn, minAmountOut, path, msg.sender, block.timestamp);
+        uint256[] memory amounts = ROUTER.swapExactTokensForTokens(amountIn, minAmountOut, path, msg.sender, deadline);
         amountOut = amounts[amounts.length - 1];
 
         // D5: zero the external-router allowance and sweep any residual `tokenIn` back
@@ -63,5 +73,13 @@ contract UniV2ForkRouter is IDexRouter {
 
         uint256[] memory amounts = ROUTER.getAmountsOut(amountIn, path);
         return amounts[amounts.length - 1];
+    }
+
+    function _decodeDeadline(
+        bytes calldata routeData
+    ) internal view returns (uint256) {
+        if (routeData.length == 0) return block.timestamp;
+        if (routeData.length != 32) revert SepehrErrors.InvalidRouteData();
+        return abi.decode(routeData, (uint256));
     }
 }

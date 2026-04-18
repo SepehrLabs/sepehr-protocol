@@ -26,17 +26,25 @@ contract MockLBRouter {
         address[] tokenPath;
     }
 
+    Version public lastVersion;
+    uint256 public lastBinStep;
+    uint256 public lastDeadline;
+
     function swapExactTokensForTokens(
         uint256 amountIn,
         uint256 amountOutMin,
         Path memory path,
         address to,
-        uint256
+        uint256 deadline
     ) external returns (uint256 amountOut) {
         IERC20(path.tokenPath[0]).transferFrom(msg.sender, address(this), amountIn);
         amountOut = (amountIn * exchangeRate) / 1e18;
         require(amountOut >= amountOutMin, "MockLB: slippage");
         IERC20(path.tokenPath[path.tokenPath.length - 1]).transfer(to, amountOut);
+
+        lastVersion = path.versions[0];
+        lastBinStep = path.pairBinSteps[0];
+        lastDeadline = deadline;
     }
 }
 

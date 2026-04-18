@@ -111,4 +111,41 @@ contract VelodromeRouterTest is Test {
         assertEq(tokenIn.balanceOf(address(router)), 0, "dust left behind in router");
         assertEq(tokenIn.balanceOf(address(this)), callerBefore - SWAP_AMOUNT + dust, "dust not swept to caller");
     }
+
+    // ── D7 + D9: per-call factory override + caller-supplied deadline ────
+
+    function test_swap_overridesFactoryAndDeadlineViaRouteData() public {
+        // D7: alternate factory (e.g. Aerodrome Slipstream) passed via routeData.
+        // D9: caller-supplied deadline is forwarded verbatim to the external router.
+        address altFactory = address(0xBEEF);
+        uint256 customDeadline = block.timestamp + 300;
+
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        bytes memory routeData = abi.encode(customDeadline, true, altFactory);
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, routeData);
+
+        assertEq(externalRouter.lastFactory(), altFactory, "factory not forwarded");
+        assertTrue(externalRouter.lastStable(), "stable not forwarded");
+        assertEq(externalRouter.lastDeadline(), customDeadline, "deadline not forwarded");
+    }
+
+    function test_swap_revertsOnZeroFactoryInRouteData() public {
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        bytes memory routeData = abi.encode(block.timestamp, false, address(0));
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, routeData);
+    }
+
+    function test_swap_revertsOnMalformedRouteData() public {
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        bytes memory bogus = hex"deadbeef";
+        vm.expectRevert(SepehrErrors.InvalidRouteData.selector);
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, bogus);
+    }
 }

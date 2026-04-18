@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
+import {CamelotRouter} from "../../src/dex/CamelotRouter.sol";
 import {UniV2ForkRouter} from "../../src/dex/UniV2ForkRouter.sol";
 import {UniswapV3Router} from "../../src/dex/UniswapV3Router.sol";
 import {ForkTestBase} from "./ForkTestBase.sol";
@@ -162,6 +163,69 @@ contract UniV2ForkRouterForkTest is ForkTestBase {
         IERC20(WETH).approve(address(router), amountIn);
         vm.expectRevert();
         router.swap(WETH, USDC, amountIn, absurdMin, "");
+        vm.stopPrank();
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Camelot Router Fork Tests (Arbitrum)
+//
+//  D6: verifies CamelotRouter's minimal ABI matches the live Arbitrum
+//  Camelot router deployed at CAMELOT_ROUTER below. Skips cleanly when
+//  RPC_ARBITRUM_PRIMARY_HTTP is not set.
+// ═══════════════════════════════════════════════════════════════════════
+
+contract CamelotRouterForkTest is ForkTestBase {
+    address constant CAMELOT_ROUTER = 0xc873fEcbd354f5A56E00E710B90EF4201db2448d;
+    address constant WETH_ARB = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
+    address constant USDC_ARB = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
+
+    CamelotRouter internal router;
+    bool internal _forked;
+    address internal swapper;
+
+    function setUp() public {
+        _forked = _tryCreateFork("RPC_ARBITRUM_PRIMARY_HTTP");
+        if (!_forked) return;
+
+        router = new CamelotRouter(CAMELOT_ROUTER, address(0));
+        swapper = makeAddr("swapper");
+    }
+
+    function test_swap_wethToUsdc() public {
+        if (!_forked) return;
+
+        uint256 amountIn = 1 ether;
+        deal(WETH_ARB, swapper, amountIn);
+
+        vm.startPrank(swapper);
+        IERC20(WETH_ARB).approve(address(router), amountIn);
+        uint256 amountOut = router.swap(WETH_ARB, USDC_ARB, amountIn, 0, "");
+        vm.stopPrank();
+
+        assertGt(amountOut, 0, "Should receive USDC from Camelot swap");
+        assertEq(IERC20(USDC_ARB).balanceOf(swapper), amountOut, "Swapper should hold the output USDC");
+    }
+
+    function test_getQuote_returnsNonZero() public {
+        if (!_forked) return;
+
+        uint256 quote = router.getQuote(WETH_ARB, USDC_ARB, 1 ether);
+        assertGt(quote, 0, "Quote should be > 0 for WETH/USDC on Camelot Arbitrum");
+    }
+
+    function test_swap_respectsMinAmountOut() public {
+        if (!_forked) return;
+
+        uint256 amountIn = 1 ether;
+        deal(WETH_ARB, swapper, amountIn);
+
+        uint256 absurdMin = type(uint128).max;
+
+        vm.startPrank(swapper);
+        IERC20(WETH_ARB).approve(address(router), amountIn);
+        vm.expectRevert();
+        router.swap(WETH_ARB, USDC_ARB, amountIn, absurdMin, "");
         vm.stopPrank();
     }
 }

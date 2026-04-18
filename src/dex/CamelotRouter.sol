@@ -6,11 +6,15 @@ import {ICamelotRouter} from "../interfaces/external/ICamelotRouter.sol";
 import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title CamelotRouter
 /// @notice Wraps Camelot DEX Router behind IDexRouter.
-///         routeData: unused.
-contract CamelotRouter is IDexRouter {
+/// @dev routeData encoding:
+///      - empty → deadline defaults to block.timestamp.
+///      - `abi.encode(uint256 deadline)` (32 bytes) → D9: caller-supplied deadline.
+///      D10: swap is `nonReentrant` as defense-in-depth on top of SepehrCore's guard.
+contract CamelotRouter is IDexRouter, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     ICamelotRouter public immutable ROUTER;
@@ -31,9 +35,11 @@ contract CamelotRouter is IDexRouter {
         address tokenOut,
         uint256 amountIn,
         uint256 minAmountOut,
-        bytes calldata
-    ) external override returns (uint256 amountOut) {
+        bytes calldata routeData
+    ) external override nonReentrant returns (uint256 amountOut) {
         if (amountIn == 0) revert SepehrErrors.ZeroAmount();
+
+        uint256 deadline = _decodeDeadline(routeData);
 
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenIn).forceApprove(address(ROUTER), amountIn);
@@ -43,7 +49,7 @@ contract CamelotRouter is IDexRouter {
         path[1] = tokenOut;
 
         uint256[] memory amounts =
-            ROUTER.swapExactTokensForTokens(amountIn, minAmountOut, path, msg.sender, REFERRER, block.timestamp);
+            ROUTER.swapExactTokensForTokens(amountIn, minAmountOut, path, msg.sender, REFERRER, deadline);
         amountOut = amounts[amounts.length - 1];
 
         // D5: zero the external-router allowance and sweep any residual `tokenIn`.
@@ -64,5 +70,13 @@ contract CamelotRouter is IDexRouter {
 
         uint256[] memory amounts = ROUTER.getAmountsOut(amountIn, path);
         return amounts[amounts.length - 1];
+    }
+
+    function _decodeDeadline(
+        bytes calldata routeData
+    ) internal view returns (uint256) {
+        if (routeData.length == 0) return block.timestamp;
+        if (routeData.length != 32) revert SepehrErrors.InvalidRouteData();
+        return abi.decode(routeData, (uint256));
     }
 }

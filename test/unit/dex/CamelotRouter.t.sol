@@ -110,4 +110,24 @@ contract CamelotRouterTest is Test {
         assertEq(tokenIn.balanceOf(address(router)), 0, "dust left behind in router");
         assertEq(tokenIn.balanceOf(address(this)), callerBefore - SWAP_AMOUNT + dust, "dust not swept to caller");
     }
+
+    // ── D9: caller-supplied deadline ────────────────────────────────────
+
+    function test_swap_forwardsDeadlineFromRouteData() public {
+        uint256 customDeadline = block.timestamp + 600;
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, abi.encode(customDeadline));
+        assertEq(externalRouter.lastDeadline(), customDeadline);
+    }
+
+    function test_swap_revertsOnMalformedRouteData() public {
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        bytes memory bogus = hex"deadbeef";
+        vm.expectRevert(SepehrErrors.InvalidRouteData.selector);
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, bogus);
+    }
 }
