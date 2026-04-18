@@ -43,6 +43,9 @@ library SepehrErrors {
     error InvalidFlashLoanCallback();
     error ConcurrentFlashLoan();
     error UnsupportedPoolFee(uint24 fee);
+    error NoCanonicalRoute(address router, address tokenIn, address tokenOut);
+    error SameToken();
+    error InvalidRouteData();
 
     error ProtectionNotEnabled(address user, bytes32 protocolKey);
     error ProtectionAlreadyEnabled(address user, bytes32 protocolKey);

@@ -711,6 +711,142 @@ contract SepehrCoreTriggersTest is Test {
             ""
         );
     }
+
+    // ─── D1/D4: canonical-route substitution at swap time ──────────
+
+    /// @dev When governance has registered a canonical routeData for
+    /// (dex, collateralAsset, debtAsset), SepehrCore must substitute it in — the
+    /// keeper's `dexRouteData` argument is ignored.
+    function test_execute_substitutesCanonicalRouteData() public {
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(alice, true);
+
+        bytes32 seqKey = keccak256("SEQ_CANONICAL");
+        vm.prank(timelock);
+        core.addAdapter(seqKey, address(seqAdapter));
+
+        vm.prank(alice);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
+
+        collateralToken.mint(address(seqAdapter), REPAY_AMOUNT * 2);
+        debtToken.mint(address(dex), REPAY_AMOUNT * 2);
+
+        bytes memory canonical = abi.encode(uint24(500), uint160(42));
+        vm.prank(timelock);
+        core.setCanonicalRoute(address(dex), address(collateralToken), address(debtToken), canonical);
+
+        bytes memory keeperSupplied = abi.encode(uint24(10_000)); // attacker steering: thin pool
+        address[] memory providers = _buildFlashProviders();
+
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            keeperSupplied
+        );
+
+        assertEq(dex.lastRouteData(), canonical, "canonical data should override keeper-supplied");
+    }
+
+    /// @dev In strict mode, a pair without a canonical route registered must
+    /// cause `execute` to revert — eliminating the keeper-pool-steering surface.
+    function test_execute_strictMode_revertsWhenNoCanonicalRoute() public {
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(alice, true);
+
+        bytes32 seqKey = keccak256("SEQ_STRICT");
+        vm.prank(timelock);
+        core.addAdapter(seqKey, address(seqAdapter));
+
+        vm.prank(alice);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
+
+        collateralToken.mint(address(seqAdapter), REPAY_AMOUNT * 2);
+        debtToken.mint(address(dex), REPAY_AMOUNT * 2);
+
+        vm.prank(timelock);
+        core.setStrictCanonicalRoutes(true);
+
+        address[] memory providers = _buildFlashProviders();
+
+        // SepehrCore wraps the flash provider call in try/catch, so the inner
+        // NoCanonicalRoute bubbles up as NoFlashLoanAvailable — either way the trigger
+        // is blocked, which is the property that matters for the strict-mode guarantee.
+        vm.prank(keeper);
+        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+
+        // Once a canonical route is registered, the same call succeeds.
+        bytes memory canonical = abi.encode(uint24(500));
+        vm.prank(timelock);
+        core.setCanonicalRoute(address(dex), address(collateralToken), address(debtToken), canonical);
+
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+        assertEq(dex.lastRouteData(), canonical);
+    }
+
+    /// @dev When collateralAsset == debtAsset (no swap), the canonical route
+    /// registry is never consulted — even in strict mode. This keeps adapters
+    /// that settle in the debt asset working without a registry entry.
+    function test_execute_strictMode_doesNotRequireRouteWhenNoSwap() public {
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(alice, true);
+        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
+
+        bytes32 seqKey = keccak256("SEQ_NOSWAP");
+        vm.prank(timelock);
+        core.addAdapter(seqKey, address(seqAdapter));
+
+        vm.prank(alice);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
+
+        vm.prank(timelock);
+        core.setStrictCanonicalRoutes(true);
+
+        address[] memory providers = _buildFlashProviders();
+
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken), // same asset — no swap, registry not consulted
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+
+        assertEq(core.lastTriggerTime(alice), block.timestamp);
+    }
 }
 
 /// @dev A mock adapter that simulates HF improvement after repayment.

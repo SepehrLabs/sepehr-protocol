@@ -12,7 +12,13 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title UniswapV3Router
 /// @notice Wraps Uniswap V3 SwapRouter behind the IDexRouter interface.
-///         routeData: abi.encode(uint24 fee) to override the default pool fee.
+///         routeData encoding:
+///           • empty → use DEFAULT_FEE, no sqrtPrice bound
+///           • `abi.encode(uint24 fee)` → custom fee, no sqrtPrice bound
+///           • `abi.encode(uint24 fee, uint160 sqrtPriceLimitX96)` → D3: bound the
+///             pool-side price movement. When wired through SepehrCore's canonical-
+///             route registry this becomes the only reachable code path (the keeper
+///             loses its ability to disable pool-side price protection with a 0).
 contract UniswapV3Router is IDexRouter {
     using SafeERC20 for IERC20;
 
@@ -41,7 +47,15 @@ contract UniswapV3Router is IDexRouter {
     ) external override returns (uint256 amountOut) {
         if (amountIn == 0) revert SepehrErrors.ZeroAmount();
 
-        uint24 fee = routeData.length > 0 ? abi.decode(routeData, (uint24)) : DEFAULT_FEE;
+        uint24 fee = DEFAULT_FEE;
+        uint160 sqrtPriceLimitX96 = 0;
+        if (routeData.length == 32) {
+            fee = abi.decode(routeData, (uint24));
+        } else if (routeData.length == 64) {
+            (fee, sqrtPriceLimitX96) = abi.decode(routeData, (uint24, uint160));
+        } else if (routeData.length != 0) {
+            revert SepehrErrors.InvalidRouteData();
+        }
 
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenIn).forceApprove(address(SWAP_ROUTER), amountIn);
@@ -55,7 +69,7 @@ contract UniswapV3Router is IDexRouter {
                 deadline: block.timestamp,
                 amountIn: amountIn,
                 amountOutMinimum: minAmountOut,
-                sqrtPriceLimitX96: 0
+                sqrtPriceLimitX96: sqrtPriceLimitX96
             })
         );
     }

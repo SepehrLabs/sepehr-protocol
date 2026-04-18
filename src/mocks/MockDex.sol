@@ -6,6 +6,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract MockDex is IDexRouter {
     uint256 public exchangeRate = 1e18; // 1:1 by default (in WAD)
+    bytes public lastRouteData;
 
     function setExchangeRate(
         uint256 rate
@@ -18,8 +19,10 @@ contract MockDex is IDexRouter {
         address tokenOut,
         uint256 amountIn,
         uint256 minAmountOut,
-        bytes calldata
+        bytes calldata routeData
     ) external override returns (uint256 amountOut) {
+        lastRouteData = routeData;
+
         IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
 
         amountOut = (amountIn * exchangeRate) / 1e18;

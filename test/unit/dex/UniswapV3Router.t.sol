@@ -69,6 +69,35 @@ contract UniswapV3RouterTest is Test {
         assertEq(amountOut, SWAP_AMOUNT);
     }
 
+    // D3: sqrtPriceLimitX96 must be forwarded when passed in extended routeData.
+    function test_swap_forwardsSqrtPriceLimit() public {
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        uint160 expectedLimit = uint160(1 << 95); // any nonzero value
+        bytes memory routeData = abi.encode(uint24(500), expectedLimit);
+        uint256 amountOut = router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, routeData);
+        assertEq(amountOut, SWAP_AMOUNT);
+        assertEq(swapRouter.lastSqrtPriceLimitX96(), expectedLimit, "sqrtPriceLimit forwarded to SwapRouter");
+    }
+
+    function test_swap_defaultsSqrtPriceLimitToZero() public {
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, "");
+        assertEq(swapRouter.lastSqrtPriceLimitX96(), 0, "zero limit when routeData empty");
+    }
+
+    function test_swap_revertsOnMalformedRouteData() public {
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        bytes memory bogus = hex"de";
+        vm.expectRevert(SepehrErrors.InvalidRouteData.selector);
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, bogus);
+    }
+
     function test_swap_revertsOnZeroAmount() public {
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         router.swap(address(tokenIn), address(tokenOut), 0, 0, "");

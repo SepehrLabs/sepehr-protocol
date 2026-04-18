@@ -56,6 +56,9 @@ library SepehrEvents {
     event FlashLoanProviderAdded(address indexed provider);
     event FlashLoanProviderRemoved(address indexed provider);
     event PauseGuardianUpdated(address indexed oldGuardian, address indexed newGuardian);
+    event CanonicalRouteSet(address indexed router, address indexed tokenIn, address indexed tokenOut, bytes data);
+    event CanonicalRouteCleared(address indexed router, address indexed tokenIn, address indexed tokenOut);
+    event StrictCanonicalRoutesUpdated(bool enabled);
 
     // ─── Emergency ───────────────────────────────────────────────
     event EmergencyPaused(address indexed by, uint256 pausedUntil);

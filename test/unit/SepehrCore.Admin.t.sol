@@ -632,4 +632,128 @@ contract SepehrCoreAdminTest is Test {
         assertEq(core.TIER_PRICES_ANNUAL_USD_6(1), 470_400_000);
         assertEq(core.TIER_PRICES_ANNUAL_USD_6(2), 1_920_000_000);
     }
+
+    // ─── D1/D4: canonical-route registry ───────────────────────
+
+    function test_setCanonicalRoute_storesData() public {
+        address router = makeAddr("router");
+        address tokenIn = makeAddr("in");
+        address tokenOut = makeAddr("out");
+        bytes memory data = abi.encode(uint24(500));
+
+        vm.prank(timelock);
+        core.setCanonicalRoute(router, tokenIn, tokenOut, data);
+
+        (bool set, bytes memory stored) = core.getCanonicalRoute(router, tokenIn, tokenOut);
+        assertTrue(set);
+        assertEq(stored, data);
+    }
+
+    function test_setCanonicalRoute_emitsEvent() public {
+        address router = makeAddr("router");
+        address tokenIn = makeAddr("in");
+        address tokenOut = makeAddr("out");
+        bytes memory data = abi.encode(uint24(500));
+
+        vm.expectEmit(true, true, true, true, address(core));
+        emit SepehrEvents.CanonicalRouteSet(router, tokenIn, tokenOut, data);
+
+        vm.prank(timelock);
+        core.setCanonicalRoute(router, tokenIn, tokenOut, data);
+    }
+
+    function test_setCanonicalRoute_revertsFromNonTimelock() public {
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
+        core.setCanonicalRoute(makeAddr("r"), makeAddr("i"), makeAddr("o"), "");
+    }
+
+    function test_setCanonicalRoute_revertsOnZeroAddress() public {
+        vm.startPrank(timelock);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        core.setCanonicalRoute(address(0), makeAddr("i"), makeAddr("o"), "");
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        core.setCanonicalRoute(makeAddr("r"), address(0), makeAddr("o"), "");
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        core.setCanonicalRoute(makeAddr("r"), makeAddr("i"), address(0), "");
+        vm.stopPrank();
+    }
+
+    function test_setCanonicalRoute_revertsOnSameToken() public {
+        address tok = makeAddr("tok");
+        vm.prank(timelock);
+        vm.expectRevert(SepehrErrors.SameToken.selector);
+        core.setCanonicalRoute(makeAddr("r"), tok, tok, "");
+    }
+
+    function test_clearCanonicalRoute_clearsData() public {
+        address router = makeAddr("router");
+        address tokenIn = makeAddr("in");
+        address tokenOut = makeAddr("out");
+
+        vm.startPrank(timelock);
+        core.setCanonicalRoute(router, tokenIn, tokenOut, abi.encode(uint24(500)));
+        core.clearCanonicalRoute(router, tokenIn, tokenOut);
+        vm.stopPrank();
+
+        (bool set,) = core.getCanonicalRoute(router, tokenIn, tokenOut);
+        assertFalse(set);
+    }
+
+    function test_clearCanonicalRoute_emitsEvent() public {
+        address router = makeAddr("router");
+        address tokenIn = makeAddr("in");
+        address tokenOut = makeAddr("out");
+
+        vm.expectEmit(true, true, true, true, address(core));
+        emit SepehrEvents.CanonicalRouteCleared(router, tokenIn, tokenOut);
+
+        vm.prank(timelock);
+        core.clearCanonicalRoute(router, tokenIn, tokenOut);
+    }
+
+    function test_clearCanonicalRoute_revertsFromNonTimelock() public {
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
+        core.clearCanonicalRoute(makeAddr("r"), makeAddr("i"), makeAddr("o"));
+    }
+
+    function test_setStrictCanonicalRoutes_togglesFlag() public {
+        assertFalse(core.strictCanonicalRoutes());
+
+        vm.prank(timelock);
+        core.setStrictCanonicalRoutes(true);
+        assertTrue(core.strictCanonicalRoutes());
+
+        vm.prank(timelock);
+        core.setStrictCanonicalRoutes(false);
+        assertFalse(core.strictCanonicalRoutes());
+    }
+
+    function test_setStrictCanonicalRoutes_emitsEvent() public {
+        vm.expectEmit(false, false, false, true, address(core));
+        emit SepehrEvents.StrictCanonicalRoutesUpdated(true);
+
+        vm.prank(timelock);
+        core.setStrictCanonicalRoutes(true);
+    }
+
+    function test_setStrictCanonicalRoutes_revertsFromNonTimelock() public {
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
+        core.setStrictCanonicalRoutes(true);
+    }
+
+    function test_canonicalRoute_keyDirectionSensitive() public {
+        address router = makeAddr("router");
+        address a = makeAddr("a");
+        address b = makeAddr("b");
+        bytes memory data = abi.encode(uint24(500));
+
+        vm.prank(timelock);
+        core.setCanonicalRoute(router, a, b, data);
+
+        // Setting (a, b) should not populate (b, a).
+        (bool setAB,) = core.getCanonicalRoute(router, a, b);
+        (bool setBA,) = core.getCanonicalRoute(router, b, a);
+        assertTrue(setAB);
+        assertFalse(setBA);
+    }
 }

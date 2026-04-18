@@ -7,6 +7,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 contract MockV3SwapRouter {
     uint256 public exchangeRate = 1e18;
 
+    uint160 public lastSqrtPriceLimitX96;
+    uint24 public lastFee;
+
     function setExchangeRate(
         uint256 rate
     ) external {
@@ -27,6 +30,8 @@ contract MockV3SwapRouter {
     function exactInputSingle(
         ExactInputSingleParams calldata params
     ) external payable returns (uint256 amountOut) {
+        lastSqrtPriceLimitX96 = params.sqrtPriceLimitX96;
+        lastFee = params.fee;
         IERC20(params.tokenIn).transferFrom(msg.sender, address(this), params.amountIn);
         amountOut = (params.amountIn * exchangeRate) / 1e18;
         require(amountOut >= params.amountOutMinimum, "MockV3: slippage");

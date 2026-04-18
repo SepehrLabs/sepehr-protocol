@@ -91,6 +91,21 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     mapping(address => bool) public allowedFlashProviders;
     mapping(address => bool) public allowedDexRouters;
 
+    /// @notice D1/D4: canonical-pool registry. Keyed by
+    /// `keccak256(router, tokenIn, tokenOut)`; when an entry is registered
+    /// the keeper-supplied `dexRouteData` is overridden with the timelock-
+    /// registered bytes at swap time. This neutralizes keeper-controlled
+    /// pool-steering vectors (UniswapV3 fee tier, Velodrome stable flag,
+    /// TraderJoe binStep, Camelot/V2 path selection) and pins the swap to
+    /// a pool that governance has explicitly blessed for that pair.
+    mapping(bytes32 => bytes) private _canonicalRouteData;
+    mapping(bytes32 => bool) public canonicalRouteSet;
+    /// @notice When `true`, triggers revert if no canonical route is registered for
+    /// the `(router, collateralAsset, debtAsset)` triple. Defaults to `false` so the
+    /// registry can be rolled out pair-by-pair without breaking triggers on already-
+    /// live pairs; governance can flip the flag once the registry is populated.
+    bool public strictCanonicalRoutes;
+
     struct AdapterEntry {
         IProtocolAdapter adapter;
         bool enabled;
@@ -545,6 +560,20 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             // upcoming off-chain price-oracle check can consume it. See H23 in the audit.
             maxSlippageBps;
             uint256 minOut = repayAmount + fee;
+
+            // D1/D4: if governance has registered a canonical route for this
+            // (router, collateralAsset, debtAsset) triple, substitute the keeper's
+            // `dexRouteData` with the registered bytes. In strict mode, triggers
+            // must have a registered canonical route or they revert outright.
+            {
+                bytes32 routeKey = _canonicalRouteKey(dexRouter, collateralAsset, debtAsset);
+                if (canonicalRouteSet[routeKey]) {
+                    dexRouteData = _canonicalRouteData[routeKey];
+                } else if (strictCanonicalRoutes) {
+                    revert SepehrErrors.NoCanonicalRoute(dexRouter, collateralAsset, debtAsset);
+                }
+            }
+
             IERC20(collateralAsset).safeIncreaseAllowance(dexRouter, collateralNeeded);
             uint256 received =
                 IDexRouter(dexRouter).swap(collateralAsset, debtAsset, collateralNeeded, minOut, dexRouteData);
@@ -818,6 +847,75 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         address router
     ) external onlyTimelock {
         allowedDexRouters[router] = false;
+    }
+
+    /// @notice D1/D4: register a canonical `routeData` blob for a `(router, tokenIn, tokenOut)`
+    /// triple. When set, the keeper's `dexRouteData` is ignored at swap time and the registered
+    /// bytes are used instead, pinning the swap to a governance-approved pool configuration.
+    /// @dev Timelock-gated. `data` is opaque to SepehrCore — it is passed verbatim to the
+    /// router's `swap` and must match whatever schema the router expects
+    /// (UniswapV3: `abi.encode(uint24 fee[, uint160 sqrtPriceLimitX96])`; Velodrome:
+    /// `abi.encode(bool stable)`; TraderJoe: `abi.encode(uint256 binStep, uint8 version)`, etc.).
+    function setCanonicalRoute(
+        address router,
+        address tokenIn,
+        address tokenOut,
+        bytes calldata data
+    ) external onlyTimelock {
+        if (router == address(0) || tokenIn == address(0) || tokenOut == address(0)) {
+            revert SepehrErrors.ZeroAddress();
+        }
+        if (tokenIn == tokenOut) revert SepehrErrors.SameToken();
+        bytes32 key = _canonicalRouteKey(router, tokenIn, tokenOut);
+        _canonicalRouteData[key] = data;
+        canonicalRouteSet[key] = true;
+        emit SepehrEvents.CanonicalRouteSet(router, tokenIn, tokenOut, data);
+    }
+
+    /// @notice Clear a previously registered canonical route.
+    /// @dev Timelock-gated. After clearing, the pair falls back to keeper-supplied routeData
+    /// (unless `strictCanonicalRoutes` is enabled, in which case the trigger will revert).
+    function clearCanonicalRoute(
+        address router,
+        address tokenIn,
+        address tokenOut
+    ) external onlyTimelock {
+        bytes32 key = _canonicalRouteKey(router, tokenIn, tokenOut);
+        delete _canonicalRouteData[key];
+        canonicalRouteSet[key] = false;
+        emit SepehrEvents.CanonicalRouteCleared(router, tokenIn, tokenOut);
+    }
+
+    /// @notice Toggle strict mode for the canonical route registry.
+    /// @dev Timelock-gated. When enabled, triggers revert if no canonical route is registered
+    /// for the `(router, collateralAsset, debtAsset)` triple — eliminating the keeper-supplied
+    /// `dexRouteData` trust surface entirely. Disable while the registry is being populated.
+    function setStrictCanonicalRoutes(
+        bool enabled
+    ) external onlyTimelock {
+        strictCanonicalRoutes = enabled;
+        emit SepehrEvents.StrictCanonicalRoutesUpdated(enabled);
+    }
+
+    /// @notice View the canonical `routeData` registered for a `(router, tokenIn, tokenOut)` triple.
+    /// @return set Whether a canonical entry is registered for the triple.
+    /// @return data The registered routeData bytes (empty if `set` is false).
+    function getCanonicalRoute(
+        address router,
+        address tokenIn,
+        address tokenOut
+    ) external view returns (bool set, bytes memory data) {
+        bytes32 key = _canonicalRouteKey(router, tokenIn, tokenOut);
+        set = canonicalRouteSet[key];
+        data = _canonicalRouteData[key];
+    }
+
+    function _canonicalRouteKey(
+        address router,
+        address tokenIn,
+        address tokenOut
+    ) private pure returns (bytes32) {
+        return keccak256(abi.encode(router, tokenIn, tokenOut));
     }
 
     /// @notice Rotate the pause-guardian role to a new address.
