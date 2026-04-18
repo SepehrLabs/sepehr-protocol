@@ -109,6 +109,42 @@ contract BalancerFlashLoanProviderTest is Test {
         assertEq(provider.getFlashLoanFeeBps(address(token)), 10);
     }
 
+    // C3: sub-1-bp fees must round up rather than truncate to 0. A 0.5-bp fee (5e13) used to
+    // report 0 bps, under-funding the repay and causing DoS. Ceiling-division fixes this.
+    function test_getFlashLoanFeeBps_subBasisPointRoundsUp() public {
+        feesCollector.setFlashLoanFeePercentage(5e13); // 0.5 bps
+        assertEq(provider.getFlashLoanFeeBps(address(token)), 1, "half-bp should report 1 bp");
+    }
+
+    function test_getFlashLoanFeeBps_oneWeiFeeRoundsUp() public {
+        feesCollector.setFlashLoanFeePercentage(1);
+        assertEq(provider.getFlashLoanFeeBps(address(token)), 1, "dust fee should report 1 bp");
+    }
+
+    function test_getFlashLoanFeeBps_exactBasisPointBoundary() public {
+        feesCollector.setFlashLoanFeePercentage(1e14); // exactly 1 bp
+        assertEq(provider.getFlashLoanFeeBps(address(token)), 1);
+
+        feesCollector.setFlashLoanFeePercentage(2e14); // exactly 2 bps
+        assertEq(provider.getFlashLoanFeeBps(address(token)), 2);
+    }
+
+    function test_getFlashLoanFeeBps_zeroStaysZero() public {
+        feesCollector.setFlashLoanFeePercentage(0);
+        assertEq(provider.getFlashLoanFeeBps(address(token)), 0);
+    }
+
+    // C2: re-entry on the same provider must revert.
+    function test_flashBorrow_revertsOnConcurrentInvocation() public {
+        callback.setReentrantProvider(address(provider));
+        callback.setReentrantAsset(address(token));
+        callback.setReentrantAmount(BORROW_AMOUNT);
+        callback.setReentrantTrigger(true);
+
+        vm.expectRevert();
+        provider.flashBorrow(address(token), BORROW_AMOUNT, address(callback), "");
+    }
+
     // ── isAvailable ──────────────────────────────────────────────────────
 
     function test_isAvailable_trueWhenEnoughLiquidity() public view {

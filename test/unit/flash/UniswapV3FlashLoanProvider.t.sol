@@ -137,6 +137,40 @@ contract UniswapV3FlashLoanProviderTest is Test {
         assertEq(provider10k.getFlashLoanFeeBps(address(tokenA)), 100);
     }
 
+    function test_getFlashLoanFeeBps_100feeTier() public {
+        MockUniswapV3Pool pool100 = new MockUniswapV3Pool(address(tokenA), address(tokenB), 100);
+        UniswapV3FlashLoanProvider provider100 = new UniswapV3FlashLoanProvider(address(pool100));
+        assertEq(provider100.getFlashLoanFeeBps(address(tokenA)), 1);
+    }
+
+    // C4: non-canonical fee tiers must revert rather than silently rounding.
+    function test_getFlashLoanFeeBps_revertsOnNonCanonicalFee() public {
+        MockUniswapV3Pool oddPool = new MockUniswapV3Pool(address(tokenA), address(tokenB), 450);
+        UniswapV3FlashLoanProvider oddProvider = new UniswapV3FlashLoanProvider(address(oddPool));
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.UnsupportedPoolFee.selector, uint24(450)));
+        oddProvider.getFlashLoanFeeBps(address(tokenA));
+    }
+
+    function test_getFlashLoanFeeBps_revertsOnZeroDynamicFee() public {
+        MockUniswapV3Pool zeroPool = new MockUniswapV3Pool(address(tokenA), address(tokenB), 0);
+        UniswapV3FlashLoanProvider zeroProvider = new UniswapV3FlashLoanProvider(address(zeroPool));
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.UnsupportedPoolFee.selector, uint24(0)));
+        zeroProvider.getFlashLoanFeeBps(address(tokenA));
+    }
+
+    // C2: a re-entrant flashBorrow must revert rather than overwrite the callback slot.
+    function test_flashBorrow_revertsOnConcurrentInvocation() public {
+        uint256 fee = (BORROW_AMOUNT * POOL_FEE) / 1_000_000;
+        tokenA.mint(address(callback), fee);
+        callback.setReentrantProvider(address(provider));
+        callback.setReentrantAsset(address(tokenA));
+        callback.setReentrantAmount(BORROW_AMOUNT);
+        callback.setReentrantTrigger(true);
+
+        vm.expectRevert();
+        provider.flashBorrow(address(tokenA), BORROW_AMOUNT, address(callback), "");
+    }
+
     // ── isAvailable ──────────────────────────────────────────────────────
 
     function test_isAvailable_trueForToken0WithEnoughBalance() public view {

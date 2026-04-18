@@ -34,6 +34,7 @@ contract AaveFlashLoanProvider is IFlashLoanProvider {
     ) external override {
         if (callback == address(0)) revert SepehrErrors.ZeroAddress();
         if (amount == 0) revert SepehrErrors.ZeroAmount();
+        if (_activeCallback != address(0)) revert SepehrErrors.ConcurrentFlashLoan();
 
         _activeCallback = callback;
         _activeData = data;

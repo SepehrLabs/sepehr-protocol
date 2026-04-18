@@ -37,6 +37,7 @@ contract UniswapV3FlashLoanProvider is IFlashLoanProvider {
     ) external override {
         if (callback == address(0)) revert SepehrErrors.ZeroAddress();
         if (amount == 0) revert SepehrErrors.ZeroAmount();
+        if (_activeCallback != address(0)) revert SepehrErrors.ConcurrentFlashLoan();
 
         address t0 = POOL.token0();
         address t1 = POOL.token1();
@@ -81,11 +82,24 @@ contract UniswapV3FlashLoanProvider is IFlashLoanProvider {
     }
 
     /// @inheritdoc IFlashLoanProvider
+    /// @dev C4: `pool.fee()` is the Uniswap V3 pool's hundredths-of-bip fee constant. On
+    /// canonical Uniswap V3 pools it can only be 100, 500, 3000, or 10000 — all exact
+    /// multiples of 100, so integer division is lossless. Algebra forks, dynamic-fee
+    /// pools, and custom factory deployments can return any uint24; silently rounding
+    /// those values would under-report the true fee and make the flash repay revert
+    /// (or, worse, let a malicious pool claim 0 bps and trick sizing logic into
+    /// under-funding the callback). We whitelist the four canonical tiers explicitly
+    /// and revert for anything else — this provider must be redeployed (or a different
+    /// provider used) to flash-borrow from a non-canonical pool.
     function getFlashLoanFeeBps(
         address
     ) external view override returns (uint256) {
-        // pool.fee() is in hundredths of a bip (1e6 = 100%), convert to bps (1e4 = 100%)
-        return uint256(POOL.fee()) / 100;
+        uint24 fee = POOL.fee();
+        if (fee == 100) return 1;
+        if (fee == 500) return 5;
+        if (fee == 3000) return 30;
+        if (fee == 10_000) return 100;
+        revert SepehrErrors.UnsupportedPoolFee(fee);
     }
 
     /// @inheritdoc IFlashLoanProvider

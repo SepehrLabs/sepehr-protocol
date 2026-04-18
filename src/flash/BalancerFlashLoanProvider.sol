@@ -34,6 +34,7 @@ contract BalancerFlashLoanProvider is IFlashLoanProvider {
     ) external override {
         if (callback == address(0)) revert SepehrErrors.ZeroAddress();
         if (amount == 0) revert SepehrErrors.ZeroAmount();
+        if (_activeCallback != address(0)) revert SepehrErrors.ConcurrentFlashLoan();
 
         _activeCallback = callback;
         _activeData = data;
@@ -78,8 +79,13 @@ contract BalancerFlashLoanProvider is IFlashLoanProvider {
     ) external view override returns (uint256) {
         address collector = VAULT.getProtocolFeesCollector();
         uint256 feePercentage = IBalancerFeesCollector(collector).getFlashLoanFeePercentage();
-        // feePercentage uses 18-decimal fixed point (1e18 = 100% = 10000 bps)
-        return feePercentage / 1e14;
+        // C3: feePercentage uses 18-decimal fixed point (1e18 = 100% = 10000 bps). Integer
+        // division truncates and returns 0 for sub-1-bp fees (e.g. a 0.5-bp = 5e13 rate
+        // would pre-fund nothing and make the flash repay fail). Use ceiling division so
+        // callers always over-approve by ≤1 wei of the loan — the upstream Vault returns
+        // any excess, so the user does not pay more than is actually owed.
+        if (feePercentage == 0) return 0;
+        return (feePercentage + 1e14 - 1) / 1e14;
     }
 
     /// @inheritdoc IFlashLoanProvider

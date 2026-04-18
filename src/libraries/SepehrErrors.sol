@@ -41,6 +41,8 @@ library SepehrErrors {
 
     error NoFlashLoanAvailable();
     error InvalidFlashLoanCallback();
+    error ConcurrentFlashLoan();
+    error UnsupportedPoolFee(uint24 fee);
 
     error ProtectionNotEnabled(address user, bytes32 protocolKey);
     error ProtectionAlreadyEnabled(address user, bytes32 protocolKey);

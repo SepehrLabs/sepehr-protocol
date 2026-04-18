@@ -122,6 +122,19 @@ contract AaveFlashLoanProviderTest is Test {
         assertTrue(provider.isAvailable(address(token), POOL_LIQUIDITY));
     }
 
+    // C2: a re-entrant flashBorrow must revert rather than overwrite the callback slot.
+    function test_flashBorrow_revertsOnConcurrentInvocation() public {
+        uint256 fee = (BORROW_AMOUNT * pool.premiumTotal()) / 10_000;
+        token.mint(address(callback), fee * 2);
+        callback.setReentrantProvider(address(provider));
+        callback.setReentrantAsset(address(token));
+        callback.setReentrantAmount(BORROW_AMOUNT);
+        callback.setReentrantTrigger(true);
+
+        vm.expectRevert();
+        provider.flashBorrow(address(token), BORROW_AMOUNT, address(callback), "");
+    }
+
     // ── Fuzz ─────────────────────────────────────────────────────────────
 
     function testFuzz_flashBorrow_correctFeeForwarded(
