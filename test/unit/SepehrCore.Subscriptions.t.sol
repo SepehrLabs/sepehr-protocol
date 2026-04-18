@@ -503,4 +503,169 @@ contract SepehrCoreSubscriptionsTest is Test {
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         core.withdrawOwnerFees(address(usdc));
     }
+
+    // ─── A12: upgradeTier ──────────────────────────────────────
+
+    function test_upgradeTier_shieldToGuardian_monthly_chargesDelta() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+
+        uint256 aliceBalBefore = usdc.balanceOf(alice);
+        uint256 expectedDelta = GUARDIAN_MONTHLY - SHIELD_MONTHLY;
+
+        vm.prank(alice);
+        core.upgradeTier(2, false);
+
+        assertEq(usdc.balanceOf(alice), aliceBalBefore - expectedDelta, "alice should pay delta");
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
+        assertEq(sub.tier, 2, "tier should be Guardian");
+        assertEq(sub.annual, false, "annual should be false");
+        assertEq(sub.expiresAt, block.timestamp + MONTHLY_PERIOD, "new period resets");
+    }
+
+    function test_upgradeTier_guardianToShield_monthly_refundsDifference() public {
+        vm.prank(alice);
+        core.subscribe(2, false);
+
+        uint256 aliceBalBefore = usdc.balanceOf(alice);
+
+        vm.prank(alice);
+        core.upgradeTier(1, false);
+
+        assertGt(usdc.balanceOf(alice), aliceBalBefore, "alice should receive refund (downgrade)");
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
+        assertEq(sub.tier, 1, "tier should be Shield");
+    }
+
+    function test_upgradeTier_switchMonthlyToAnnual_sameTier_allowed() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+
+        vm.prank(alice);
+        core.upgradeTier(1, true);
+
+        ISepehrCore.Subscription memory sub = core.getSubscription(alice);
+        assertEq(sub.tier, 1, "tier stays Shield");
+        assertEq(sub.annual, true, "annual flag flipped");
+        assertEq(sub.expiresAt, block.timestamp + ANNUAL_PERIOD, "annual period starts");
+    }
+
+    function test_upgradeTier_revertsOnSameTierSameCadence() public {
+        vm.prank(alice);
+        core.subscribe(2, false);
+
+        vm.prank(alice);
+        vm.expectRevert(SepehrErrors.SameTierUpgrade.selector);
+        core.upgradeTier(2, false);
+    }
+
+    function test_upgradeTier_revertsOnTier0() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+
+        vm.prank(alice);
+        vm.expectRevert(SepehrErrors.InvalidTier.selector);
+        core.upgradeTier(0, false);
+    }
+
+    function test_upgradeTier_revertsOnTier5() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+
+        vm.prank(alice);
+        vm.expectRevert(SepehrErrors.InvalidTier.selector);
+        core.upgradeTier(5, false);
+    }
+
+    function test_upgradeTier_revertsOnTitanSelfUpgrade() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+
+        vm.prank(alice);
+        vm.expectRevert(SepehrErrors.TitanSelfSubscribeNotAllowed.selector);
+        core.upgradeTier(4, false);
+    }
+
+    function test_upgradeTier_revertsWhenNoSubscription() public {
+        vm.prank(alice);
+        vm.expectRevert(SepehrErrors.SubscriptionNotFound.selector);
+        core.upgradeTier(2, false);
+    }
+
+    function test_upgradeTier_revertsWhenExpired() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+
+        vm.warp(block.timestamp + MONTHLY_PERIOD + 1);
+
+        vm.prank(alice);
+        vm.expectRevert(SepehrErrors.SubscriptionExpired.selector);
+        core.upgradeTier(2, false);
+    }
+
+    function test_upgradeTier_revertsForTitanHolder() public {
+        core.grantTitanSubscription(alice, 30 days);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.UpgradeTierPathInvalid.selector, uint8(4), uint8(2)));
+        core.upgradeTier(2, false);
+    }
+
+    function test_upgradeTier_revertsWhenPaused() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+
+        vm.prank(guardian);
+        core.pause();
+
+        vm.prank(alice);
+        vm.expectRevert(SepehrErrors.ContractPaused.selector);
+        core.upgradeTier(2, false);
+    }
+
+    function test_upgradeTier_proRataCredit_halfwayThrough() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+
+        // Halfway through month, upgrading to Guardian monthly should credit ~SHIELD_MONTHLY/2.
+        vm.warp(block.timestamp + MONTHLY_PERIOD / 2);
+
+        uint256 aliceBalBefore = usdc.balanceOf(alice);
+        uint256 credit = SHIELD_MONTHLY / 2;
+        uint256 expectedDelta = GUARDIAN_MONTHLY - credit;
+
+        vm.prank(alice);
+        core.upgradeTier(2, false);
+
+        assertEq(usdc.balanceOf(alice), aliceBalBefore - expectedDelta, "half-period credit applied");
+    }
+
+    function test_upgradeTier_emitsTierUpgradedAndSubscribed() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+
+        vm.expectEmit(true, false, false, true);
+        emit SepehrEvents.TierUpgraded(alice, 1, 2);
+        vm.expectEmit(true, false, false, true);
+        emit SepehrEvents.Subscribed(alice, block.timestamp + MONTHLY_PERIOD, 2, false, block.chainid);
+
+        vm.prank(alice);
+        core.upgradeTier(2, false);
+    }
+
+    function test_upgradeTier_creditBoundedByOwnerFeeBalance() public {
+        vm.prank(alice);
+        core.subscribe(2, false);
+
+        // Owner drains treasury before alice upgrades — credit must be clamped to remaining balance (0).
+        core.withdrawOwnerFees(address(usdc));
+
+        uint256 aliceBalBefore = usdc.balanceOf(alice);
+
+        vm.prank(alice);
+        core.upgradeTier(3, false);
+
+        // Credit clamped to 0, so alice pays full Watchtower price.
+        assertEq(usdc.balanceOf(alice), aliceBalBefore - WATCHTOWER_MONTHLY, "full price when treasury drained");
+    }
 }

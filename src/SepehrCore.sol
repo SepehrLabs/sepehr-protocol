@@ -207,6 +207,63 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     }
 
     /// @inheritdoc ISepehrCore
+    /// @dev A12: users on tier 1/2 could previously only switch tier by unsubscribing and
+    /// re-subscribing, which either forfeited the remaining prepaid window (before H25) or
+    /// round-tripped funds through the refund path (after H25). `upgradeTier` gives a single
+    /// atomic path: the user pays the new tier's price minus a pro-rata credit for the unused
+    /// portion of their existing subscription. The credit is bounded by
+    /// `ownerFeeBalances[usdc]` so the protocol cannot over-credit a drained treasury.
+    /// Downgrades (new price ≤ credit) are allowed and simply refund the difference; same-
+    /// tier-same-cadence calls revert with `SameTierUpgrade`. Titan (tier 4) remains
+    /// owner-granted only.
+    function upgradeTier(
+        uint8 newTier,
+        bool newAnnual
+    ) external override nonReentrant whenNotPaused {
+        if (newTier == 0 || newTier > 4) revert SepehrErrors.InvalidTier();
+        if (newTier == 4) revert SepehrErrors.TitanSelfSubscribeNotAllowed();
+
+        Subscription storage sub = _subscriptions[msg.sender];
+        if (sub.tier == 0) revert SepehrErrors.SubscriptionNotFound();
+        if (sub.expiresAt <= block.timestamp) revert SepehrErrors.SubscriptionExpired();
+        if (sub.tier == 4) revert SepehrErrors.UpgradeTierPathInvalid(4, newTier);
+        if (sub.tier == newTier && sub.annual == newAnnual) revert SepehrErrors.SameTierUpgrade();
+
+        uint256 credit;
+        {
+            uint256 remaining = sub.expiresAt - block.timestamp;
+            uint256 oldDuration = sub.annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
+            uint256 oldPrice =
+                sub.annual ? TIER_PRICES_ANNUAL_USD_6[sub.tier - 1] : TIER_PRICES_MONTHLY_USD_6[sub.tier - 1];
+            credit = (oldPrice * remaining) / oldDuration;
+            uint256 avail = ownerFeeBalances[address(usdc)];
+            if (credit > avail) credit = avail;
+        }
+
+        uint256 newPrice = newAnnual ? TIER_PRICES_ANNUAL_USD_6[newTier - 1] : TIER_PRICES_MONTHLY_USD_6[newTier - 1];
+        uint256 newDuration = newAnnual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
+
+        uint8 oldTier = sub.tier;
+        if (newPrice > credit) {
+            uint256 delta = newPrice - credit;
+            usdc.safeTransferFrom(msg.sender, address(this), delta);
+            ownerFeeBalances[address(usdc)] += delta;
+        } else if (newPrice < credit) {
+            uint256 refund = credit - newPrice;
+            ownerFeeBalances[address(usdc)] -= refund;
+            usdc.safeTransfer(msg.sender, refund);
+        }
+
+        sub.tier = newTier;
+        sub.annual = newAnnual;
+        sub.expiresAt = block.timestamp + newDuration;
+        sub.collateralValueUsdSnapshot = 0;
+
+        emit SepehrEvents.TierUpgraded(msg.sender, oldTier, newTier);
+        emit SepehrEvents.Subscribed(msg.sender, sub.expiresAt, newTier, newAnnual, block.chainid);
+    }
+
+    /// @inheritdoc ISepehrCore
     /// @dev H25: on early cancellation we refund the pro-rata unused portion of the remaining
     /// subscription in USDC. Previously an `unsubscribe` simply deleted the record and the user
     /// forfeited all prepaid time — equivalent to a silent penalty for cancelling. Refunds are

@@ -24,6 +24,8 @@ library SepehrErrors {
     error InvalidTier();
     error TitanSelfSubscribeNotAllowed();
     error InsufficientPayment(uint256 required, uint256 provided);
+    error SameTierUpgrade();
+    error UpgradeTierPathInvalid(uint8 fromTier, uint8 toTier);
 
     error BelowMinimumCollateral(uint256 usdValue, uint256 minimumUsd);
     error TierCollateralCapExceeded(uint256 usdValue, uint256 capUsd);

@@ -36,6 +36,18 @@ interface ISepehrCore {
     /// @notice Cancel the subscription. Remaining time is forfeited.
     function unsubscribe() external;
 
+    /// @notice Upgrade (or change billing cadence on) an active subscription.
+    /// @dev A12: callers pay the full price of the new tier/period; the unused pro-rata
+    /// portion of the existing subscription is credited against the new price so users
+    /// upgrading mid-period are not double-billed. Remaining time is forfeited — the
+    /// new period starts now. Tier 4 is owner-granted and cannot be self-upgraded to.
+    /// @param newTier The new tier (1-3).
+    /// @param newAnnual True for annual billing, false for monthly.
+    function upgradeTier(
+        uint8 newTier,
+        bool newAnnual
+    ) external;
+
     /// @notice Enable Sepehr protection on a specific protocol position.
     /// @param protocolKey The keccak256 key identifying the protocol.
     /// @param thresholdHF The health-factor threshold that triggers protection (WAD).
