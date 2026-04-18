@@ -37,6 +37,15 @@ contract MockAavePoolAdapter is IAavePool {
     RepayCall[] public repayCalls;
     WithdrawCall[] public withdrawCalls;
 
+    /// @dev When true, calls to `repay` with `interestRateMode = 2` revert so the adapter's
+    ///      try/catch fallback to stable (mode 1) can be exercised.
+    bool public revertOnVariableMode;
+
+    /// @dev When non-zero, `repay` only pulls `min(amount, cap)` tokens from the caller, simulating
+    ///      Aave's behaviour when `amount` exceeds the user's outstanding debt. Leaves a verifiable
+    ///      surplus in the adapter so the B12 sweep can be asserted.
+    uint256 public repayCapAmount;
+
     constructor(
         address underlying
     ) {
@@ -62,6 +71,18 @@ contract MockAavePoolAdapter is IAavePool {
             ltv: ltv,
             healthFactor: healthFactor
         });
+    }
+
+    function setRevertOnVariableMode(
+        bool flag
+    ) external {
+        revertOnVariableMode = flag;
+    }
+
+    function setRepayCap(
+        uint256 cap
+    ) external {
+        repayCapAmount = cap;
     }
 
     // ── Getters for recorded calls ─────────────────────────────────────
@@ -108,11 +129,20 @@ contract MockAavePoolAdapter is IAavePool {
         uint256 interestRateMode,
         address onBehalfOf
     ) external override returns (uint256) {
+        if (revertOnVariableMode && interestRateMode == 2) {
+            revert("MockAavePoolAdapter: NO_DEBT_OF_SELECTED_TYPE");
+        }
+        uint256 take = amount;
+        if (repayCapAmount != 0 && take > repayCapAmount) {
+            take = repayCapAmount;
+        }
         repayCalls.push(
             RepayCall({asset: asset, amount: amount, interestRateMode: interestRateMode, onBehalfOf: onBehalfOf})
         );
-        IERC20(asset).transferFrom(msg.sender, address(this), amount);
-        return amount;
+        if (take > 0) {
+            IERC20(asset).transferFrom(msg.sender, address(this), take);
+        }
+        return take;
     }
 
     function withdraw(

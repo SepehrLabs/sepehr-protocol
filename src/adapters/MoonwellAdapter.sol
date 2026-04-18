@@ -62,6 +62,8 @@ contract MoonwellAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B12: sweep residual `debtAsset` back to Core after `repayBorrowBehalf`, which
+    ///      caps at the user's outstanding debt and may return surplus to this adapter.
     function repay(
         address user,
         address debtAsset,
@@ -70,6 +72,10 @@ contract MoonwellAdapter is IProtocolAdapter {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(MTOKEN), amount);
         MTOKEN.repayBorrowBehalf(user, amount);
+        uint256 surplus = IERC20(debtAsset).balanceOf(address(this));
+        if (surplus > 0) {
+            IERC20(debtAsset).safeTransfer(core, surplus);
+        }
     }
 
     /// @inheritdoc IProtocolAdapter

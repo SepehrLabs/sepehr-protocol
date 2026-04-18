@@ -332,7 +332,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         // outstanding debt Sepehr may close in a single trigger (e.g. "never touch more than
         // 25% at once"), which protects them from a keeper that over-repays and drains their
         // position. `getDebt` may return 0 for adapters that cannot read debt in a single call
-        // (Fluid's per-vault model, etc.); in that case we short-circuit the percent check —
+        // (per-vault models where debt is partitioned across positions, etc.); in that case we short-circuit the percent check —
         // the flash loan + adapter.repay() would still fail on any amount exceeding true debt,
         // but the percent-of-debt guarantee is downgraded to "whatever the protocol permits".
         {

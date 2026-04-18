@@ -61,6 +61,8 @@ contract CompoundV2Adapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B12: Compound V2 `repayBorrowBehalf` caps at the user's outstanding debt; any
+    ///      unused `debtAsset` must be swept back to Core so it isn't stranded in the adapter.
     function repay(
         address user,
         address debtAsset,
@@ -69,6 +71,10 @@ contract CompoundV2Adapter is IProtocolAdapter {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(CTOKEN), amount);
         CTOKEN.repayBorrowBehalf(user, amount);
+        uint256 surplus = IERC20(debtAsset).balanceOf(address(this));
+        if (surplus > 0) {
+            IERC20(debtAsset).safeTransfer(core, surplus);
+        }
     }
 
     /// @inheritdoc IProtocolAdapter

@@ -64,6 +64,8 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B12: sweep residual `debtAsset` after `repay`, which caps at the user's
+    ///      outstanding debt and may leave a surplus in the adapter.
     function repay(
         address user,
         address debtAsset,
@@ -72,6 +74,10 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(CONTROLLER), amount);
         CONTROLLER.repay(amount, user);
+        uint256 surplus = IERC20(debtAsset).balanceOf(address(this));
+        if (surplus > 0) {
+            IERC20(debtAsset).safeTransfer(core, surplus);
+        }
     }
 
     /// @inheritdoc IProtocolAdapter

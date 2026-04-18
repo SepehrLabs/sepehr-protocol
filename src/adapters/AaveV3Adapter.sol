@@ -50,6 +50,12 @@ contract AaveV3Adapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B13: try variable-rate debt (mode 2) first; on failure (e.g. user holds only
+    ///      stable-rate debt on legacy markets), fall back to stable mode 1. Aave reverts with
+    ///      `NO_DEBT_OF_SELECTED_TYPE` if the mode is wrong, which we catch here.
+    ///      Audit B12: after the protocol call, sweep any residual `debtAsset` balance back to
+    ///      Core. Aave's `repay` caps at the user's outstanding debt; if the keeper submitted a
+    ///      slightly stale amount the surplus would otherwise be stranded in this adapter.
     function repay(
         address user,
         address debtAsset,
@@ -57,7 +63,14 @@ contract AaveV3Adapter is IProtocolAdapter {
     ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(POOL), amount);
-        POOL.repay(debtAsset, amount, 2, user);
+        try POOL.repay(debtAsset, amount, 2, user) returns (uint256) {}
+        catch {
+            POOL.repay(debtAsset, amount, 1, user);
+        }
+        uint256 surplus = IERC20(debtAsset).balanceOf(address(this));
+        if (surplus > 0) {
+            IERC20(debtAsset).safeTransfer(core, surplus);
+        }
     }
 
     /// @inheritdoc IProtocolAdapter

@@ -135,6 +135,41 @@ contract AaveV3AdapterTest is Test {
         assertEq(debtToken.balanceOf(address(adapter)), 0);
     }
 
+    /// @dev B12: when Aave accepts less than the supplied amount (user debt fully repaid mid-flight),
+    /// the adapter must sweep the surplus back to Core instead of stranding it.
+    function test_repay_sweepsSurplusToCoreWhenPoolAcceptsPartial() public {
+        uint256 amount = 100e18;
+        uint256 cap = 70e18;
+        debtToken.mint(address(adapter), amount);
+        pool.setRepayCap(cap);
+
+        vm.prank(core);
+        adapter.repay(user, address(debtToken), amount);
+
+        assertEq(debtToken.balanceOf(address(pool)), cap);
+        assertEq(debtToken.balanceOf(address(core)), amount - cap);
+        assertEq(debtToken.balanceOf(address(adapter)), 0);
+    }
+
+    /// @dev B13: if the user holds only stable-rate debt on a legacy market, Aave reverts on
+    /// mode=2. The adapter must catch that and retry with mode=1.
+    function test_repay_fallsBackToStableWhenVariableReverts() public {
+        uint256 amount = 40e18;
+        debtToken.mint(address(adapter), amount);
+        pool.setRevertOnVariableMode(true);
+
+        vm.prank(core);
+        adapter.repay(user, address(debtToken), amount);
+
+        // The variable-mode call reverts and rolls back its recorded entry, so only the
+        // successful mode=1 call is observable.
+        assertEq(pool.repayCallCount(), 1);
+        (,, uint256 mode,) = pool.repayCalls(0);
+        assertEq(mode, 1);
+        assertEq(debtToken.balanceOf(address(pool)), amount);
+        assertEq(debtToken.balanceOf(address(adapter)), 0);
+    }
+
     // ─── withdrawCollateral ────────────────────────────────────────────
 
     function test_withdrawCollateral_revertsWhenNotCore() public {

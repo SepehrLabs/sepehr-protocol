@@ -89,6 +89,8 @@ contract MorphoBlueAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B12: Morpho `repay` caps at the user's outstanding debt shares; excess
+    ///      `debtAsset` stays in the adapter and is swept back to Core.
     function repay(
         address user,
         address debtAsset,
@@ -98,6 +100,10 @@ contract MorphoBlueAdapter is IProtocolAdapter {
         IMorpho.MarketParams memory params = MORPHO.idToMarketParams(MARKET_ID);
         IERC20(debtAsset).forceApprove(address(MORPHO), amount);
         MORPHO.repay(params, amount, 0, user, "");
+        uint256 surplus = IERC20(debtAsset).balanceOf(address(this));
+        if (surplus > 0) {
+            IERC20(debtAsset).safeTransfer(core, surplus);
+        }
     }
 
     /// @inheritdoc IProtocolAdapter

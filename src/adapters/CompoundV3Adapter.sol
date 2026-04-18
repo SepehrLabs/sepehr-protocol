@@ -73,6 +73,11 @@ contract CompoundV3Adapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B12: Comet's `supplyTo` applies to the user's borrow balance first, then any
+    ///      excess becomes positive supply (which the user would have to withdraw manually).
+    ///      Sweep the residual balance back to Core so we don't accidentally mint supply to the
+    ///      user with flash-loaned funds; if Comet consumed the full `amount` the sweep is a
+    ///      no-op.
     function repay(
         address user,
         address debtAsset,
@@ -81,6 +86,10 @@ contract CompoundV3Adapter is IProtocolAdapter {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(COMET), amount);
         COMET.supplyTo(user, debtAsset, amount);
+        uint256 surplus = IERC20(debtAsset).balanceOf(address(this));
+        if (surplus > 0) {
+            IERC20(debtAsset).safeTransfer(core, surplus);
+        }
     }
 
     /// @inheritdoc IProtocolAdapter

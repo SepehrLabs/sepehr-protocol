@@ -52,6 +52,8 @@ contract RadiantAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B13: variable (mode 2) first, stable (mode 1) fallback.
+    ///      Audit B12: sweep any residual `debtAsset` balance back to Core after the protocol call.
     function repay(
         address user,
         address debtAsset,
@@ -59,7 +61,14 @@ contract RadiantAdapter is IProtocolAdapter {
     ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(POOL), amount);
-        POOL.repay(debtAsset, amount, 2, user);
+        try POOL.repay(debtAsset, amount, 2, user) returns (uint256) {}
+        catch {
+            POOL.repay(debtAsset, amount, 1, user);
+        }
+        uint256 surplus = IERC20(debtAsset).balanceOf(address(this));
+        if (surplus > 0) {
+            IERC20(debtAsset).safeTransfer(core, surplus);
+        }
     }
 
     /// @inheritdoc IProtocolAdapter

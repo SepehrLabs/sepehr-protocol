@@ -81,6 +81,11 @@ contract GearboxAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B12: Gearbox moves the full `amount` into the user's credit account before the
+    ///      multicall, so the adapter itself holds no debt tokens after the call. The sweep is
+    ///      defensive (no-op in the happy path) to keep invariants uniform across adapters.
+    ///      Any residual left inside the credit account after `decreaseDebt` belongs to the user,
+    ///      not Sepehr, and is not our responsibility to recover.
     function repay(
         address user,
         address debtAsset,
@@ -96,6 +101,10 @@ contract GearboxAdapter is IProtocolAdapter {
         // Encode decreaseDebt(uint256) selector with amount.
         calls[0] = abi.encodeWithSignature("decreaseDebt(uint256)", amount);
         ICreditFacade(facade).botMulticall(creditAccount, calls);
+        uint256 surplus = IERC20(debtAsset).balanceOf(address(this));
+        if (surplus > 0) {
+            IERC20(debtAsset).safeTransfer(core, surplus);
+        }
     }
 
     /// @inheritdoc IProtocolAdapter
