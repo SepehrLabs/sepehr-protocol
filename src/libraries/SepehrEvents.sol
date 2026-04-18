@@ -44,6 +44,7 @@ library SepehrEvents {
     event OwnerFeesWithdrawn(address indexed asset, address indexed to, uint256 amount);
     event KeeperFeesWithdrawn(address indexed keeper, address indexed asset, uint256 amount);
     event TierFeeBpsUpdated(uint8 indexed tier, uint256 oldBps, uint256 newBps);
+    event MinCollateralUsdUpdated(uint256 oldMin, uint256 newMin);
 
     // ─── Admin ───────────────────────────────────────────────────
     event AdapterAdded(bytes32 indexed protocolKey, address adapter);
@@ -57,6 +58,6 @@ library SepehrEvents {
     event PauseGuardianUpdated(address indexed oldGuardian, address indexed newGuardian);
 
     // ─── Emergency ───────────────────────────────────────────────
-    event EmergencyPaused(address indexed by);
+    event EmergencyPaused(address indexed by, uint256 pausedUntil);
     event Unpaused(address indexed by);
 }

@@ -11,7 +11,6 @@ import {IFlashLoanProvider} from "./interfaces/IFlashLoanProvider.sol";
 import {IProtocolAdapter} from "./interfaces/IProtocolAdapter.sol";
 import {ISepehrCallback} from "./interfaces/ISepehrCallback.sol";
 import {ISepehrCore} from "./interfaces/ISepehrCore.sol";
-import {ISubscriptionOracle} from "./interfaces/ISubscriptionOracle.sol";
 import {HealthFactorMath} from "./libraries/HealthFactorMath.sol";
 import {Percentages} from "./libraries/Percentages.sol";
 import {SepehrErrors} from "./libraries/SepehrErrors.sol";
@@ -32,6 +31,21 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     uint256 public constant COOLDOWN_SECONDS = 3600;
     uint256 public constant MONTHLY_PERIOD = 30 days;
     uint256 public constant ANNUAL_PERIOD = 365 days;
+
+    /// @notice Hard ceiling on any per-tier trigger fee. A8: `setTierFeeBps` must not be able to
+    /// raise the fee beyond this value, because existing subscribers cannot revoke faster than
+    /// the timelock can propose — a compromised/malicious timelock proposal could otherwise set
+    /// a fee of e.g. 99.99% and capture user collateral on every trigger. 100 bps = 1% is well
+    /// above the highest launched tier (20 bps); anything above this requires a contract
+    /// migration rather than a parameter tweak.
+    uint256 public constant MAX_TIER_FEE_BPS = 100;
+
+    /// @notice Maximum duration a single `pause()` call may freeze the contract. A11: without an
+    /// auto-expiry a compromised owner/guardian key can permanently censor protections; the
+    /// contract must eventually un-freeze itself so users can at least unsubscribe and call
+    /// `disableProtection` without waiting on a human. 7 days is long enough for a legitimate
+    /// incident response (timelock + review) and short enough to avoid indefinite lockout.
+    uint256 public constant MAX_PAUSE_DURATION = 7 days;
 
     uint256[3] public TIER_PRICES_MONTHLY_USD_6 = [
         9_000_000, // Shield: $9/mo
@@ -61,10 +75,15 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
     // ─── State ───────────────────────────────────────────────────
     IERC20 public immutable usdc;
-    ISubscriptionOracle public subscriptionOracle;
     address public pauseGuardian;
     address public timelock;
-    bool public paused;
+    /// @notice Timestamp until which the contract is paused. A11: represented as an absolute
+    /// timestamp rather than a boolean so that every `pause()` has an auto-expiry, preventing
+    /// indefinite lockout even if the owner/guardian disappears or is compromised.
+    uint256 public pausedUntil;
+    /// @notice Minimum collateral (USD-8) required to enable protection on any position.
+    /// A7: timelock-gated gate against abusing cheap/free tiers with dust positions. Set to 0
+    /// to disable the gate entirely.
     uint256 public minCollateralUsd;
 
     mapping(address => bool) public keepers;
@@ -98,7 +117,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
     // ─── Modifiers ───────────────────────────────────────────────
     modifier whenNotPaused() {
-        if (paused) revert SepehrErrors.ContractPaused();
+        if (block.timestamp < pausedUntil) revert SepehrErrors.ContractPaused();
         _;
     }
 
@@ -120,22 +139,27 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     }
 
     // ─── Constructor ─────────────────────────────────────────────
+    /// @param _owner initial protocol owner (holds `onlyOwner` + fee-withdraw rights).
+    /// @param _timelock 48h-delay governance contract; sole caller of every admin mutation.
+    /// @param _pauseGuardian address able to pause alongside the owner for rapid incident response.
+    /// @param _usdc subscription payment token.
+    /// @param _minCollateralUsd minimum USD-8 collateral required at `enableProtection`; 0 disables.
+    /// @dev A6: the legacy `_subscriptionOracle` constructor slot was removed because the oracle
+    /// was never read. Per-position USD value comes from `adapter.getCollateralValueUsd()`, which
+    /// already exists for the tier-cap path and is trust-minimized by timelock-registered adapters.
     constructor(
         address _owner,
         address _timelock,
         address _pauseGuardian,
-        address _subscriptionOracle,
         address _usdc,
         uint256 _minCollateralUsd
     ) Ownable(_owner) {
         if (_timelock == address(0)) revert SepehrErrors.ZeroAddress();
         if (_pauseGuardian == address(0)) revert SepehrErrors.ZeroAddress();
-        if (_subscriptionOracle == address(0)) revert SepehrErrors.ZeroAddress();
         if (_usdc == address(0)) revert SepehrErrors.ZeroAddress();
 
         timelock = _timelock;
         pauseGuardian = _pauseGuardian;
-        subscriptionOracle = ISubscriptionOracle(_subscriptionOracle);
         usdc = IERC20(_usdc);
         minCollateralUsd = _minCollateralUsd;
     }
@@ -235,6 +259,17 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
         if (!entry.adapter.checkDelegation(msg.sender)) {
             revert SepehrErrors.DelegationRevoked(msg.sender, protocolKey);
+        }
+
+        // A7: minimum-collateral gate. The gate was specified in the error library but never
+        // thrown — so a user could subscribe to the free/cheap tiers with a dust position and
+        // waste keeper gas on forever-unprofitable triggers. `minCollateralUsd == 0` is
+        // treated as "disabled" so test fixtures and initial deploys can opt out.
+        if (minCollateralUsd != 0) {
+            uint256 collateralUsd = entry.adapter.getCollateralValueUsd(msg.sender);
+            if (collateralUsd < minCollateralUsd) {
+                revert SepehrErrors.BelowMinimumCollateral(collateralUsd, minCollateralUsd);
+            }
         }
 
         _protections[msg.sender][protocolKey] = PositionProtection({
@@ -479,23 +514,23 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
     // ─── Fees ────────────────────────────────────────────────────
 
-    /// @notice Withdraw the protocol owner's accrued revenue for a specific asset.
-    /// @dev Owner-only because the funds belong to the protocol treasury. The asset must be provided
-    /// because per-asset accounting holds separate balances for subscription USDC and each debt
-    /// asset (DAI, WETH, USDT, …) collected from triggers. Reverts if the per-asset balance is zero.
-    /// @param asset The ERC-20 address to withdraw (e.g. USDC for subscription revenue, or the debt
-    /// asset of a protected position for trigger fees).
-    /// @param to The address that will receive the accrued tokens.
+    /// @notice Withdraw the protocol owner's accrued revenue for a specific asset to the
+    /// current owner address.
+    /// @dev A10: the recipient is hardcoded to `owner()` so a compromised owner key cannot
+    /// extract fees to an arbitrary wallet. Changing the destination requires `transferOwnership`
+    /// + `acceptOwnership` (Ownable2Step), which gives the outgoing key at least one block of
+    /// observability. Per-asset accounting is preserved (subscription USDC vs. per-debt-asset
+    /// trigger revenue). Reverts if the per-asset balance is zero.
+    /// @param asset The ERC-20 address to withdraw.
     function withdrawOwnerFees(
-        address asset,
-        address to
+        address asset
     ) external nonReentrant {
         if (msg.sender != owner()) revert SepehrErrors.NotOwner();
         if (asset == address(0)) revert SepehrErrors.ZeroAddress();
-        if (to == address(0)) revert SepehrErrors.ZeroAddress();
         uint256 amount = ownerFeeBalances[asset];
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         ownerFeeBalances[asset] = 0;
+        address to = owner();
         IERC20(asset).safeTransfer(to, amount);
         emit SepehrEvents.OwnerFeesWithdrawn(asset, to, amount);
     }
@@ -517,21 +552,35 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
     // ─── Pause ───────────────────────────────────────────────────
 
-    /// @notice Emergency-pause all user-facing and keeper mutations.
+    /// @notice Emergency-pause all user-facing and keeper mutations for up to `MAX_PAUSE_DURATION`.
     /// @dev Callable by the owner or the pause guardian so the contract can be frozen quickly
-    /// in response to an incident without waiting for the 48h timelock.
+    /// in response to an incident without waiting for the 48h timelock. A11: the pause is
+    /// represented as an absolute `pausedUntil` timestamp that auto-expires after
+    /// `MAX_PAUSE_DURATION`, preventing indefinite censorship if the owner/guardian keys are
+    /// compromised or lost. To keep the pause in force longer, the operator must re-call
+    /// `pause()` before `pausedUntil` elapses.
     function pause() external onlyPauseGuardianOrOwner {
-        paused = true;
-        emit SepehrEvents.EmergencyPaused(msg.sender);
+        uint256 newPausedUntil = block.timestamp + MAX_PAUSE_DURATION;
+        pausedUntil = newPausedUntil;
+        emit SepehrEvents.EmergencyPaused(msg.sender, newPausedUntil);
     }
 
-    /// @notice Resume the contract after a pause.
+    /// @notice Resume the contract before the pause auto-expires.
     /// @dev Owner-only to ensure the pause guardian cannot unilaterally un-pause after the owner
-    /// has investigated an incident.
+    /// has investigated an incident. Setting `pausedUntil = 0` overrides an earlier future
+    /// timestamp; the auto-expiry path (reaching `pausedUntil`) cannot be distinguished on
+    /// chain from the manual-unpause path, which is intentional — both are "contract is now
+    /// live".
     function unpause() external {
         if (msg.sender != owner()) revert SepehrErrors.NotOwner();
-        paused = false;
+        pausedUntil = 0;
         emit SepehrEvents.Unpaused(msg.sender);
+    }
+
+    /// @notice Convenience view: returns true while the contract is currently paused.
+    /// @dev Preserves the pre-A11 public `paused` getter shape for off-chain consumers.
+    function paused() external view returns (bool) {
+        return block.timestamp < pausedUntil;
     }
 
     // ─── Admin (Timelock-gated) ──────────────────────────────────
@@ -612,17 +661,35 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
     /// @notice Update the trigger fee (in basis points) charged to subscribers of a given tier.
     /// @dev Timelock-gated because fees directly affect economics for all existing subscribers;
-    /// changes should go through governance and announcement before taking effect.
+    /// changes should go through governance and announcement before taking effect. A8: bounded
+    /// by `MAX_TIER_FEE_BPS` (1%) so even a rushed/malicious proposal cannot seize user
+    /// collateral via a 99% fee — anything above that requires a contract migration.
     /// @param tier Tier index in [1, 4]; reverts otherwise.
-    /// @param newBps Replacement fee in basis points applied to the repaid amount.
+    /// @param newBps Replacement fee in basis points applied to the repaid amount; must be
+    /// ≤ `MAX_TIER_FEE_BPS`.
     function setTierFeeBps(
         uint8 tier,
         uint256 newBps
     ) external onlyTimelock {
         if (tier == 0 || tier > 4) revert SepehrErrors.InvalidTier();
+        if (newBps > MAX_TIER_FEE_BPS) {
+            revert SepehrErrors.TierFeeBpsTooHigh(newBps, MAX_TIER_FEE_BPS);
+        }
         uint256 old = TIER_FEE_BPS[tier - 1];
         TIER_FEE_BPS[tier - 1] = newBps;
         emit SepehrEvents.TierFeeBpsUpdated(tier, old, newBps);
+    }
+
+    /// @notice Update the minimum USD-8 collateral required to enable protection.
+    /// @dev Timelock-gated. Setting to 0 disables the gate entirely (useful for dev/test or
+    /// emergency relief). A7: previously dead state; now enforced in `enableProtection`.
+    /// @param newMin New minimum, in USD-8 units (e.g. 500e8 = $500).
+    function setMinCollateralUsd(
+        uint256 newMin
+    ) external onlyTimelock {
+        uint256 old = minCollateralUsd;
+        minCollateralUsd = newMin;
+        emit SepehrEvents.MinCollateralUsdUpdated(old, newMin);
     }
 
     /// @notice Grant a Titan (tier 4) subscription free of charge.

@@ -11,7 +11,6 @@ import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
 import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
 import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
-import {MockOracle} from "../../src/mocks/MockOracle.sol";
 
 contract MockERC20 is ERC20 {
     constructor(
@@ -29,7 +28,6 @@ contract MockERC20 is ERC20 {
 
 contract SepehrCoreAdminTest is Test {
     SepehrCore public core;
-    MockOracle public oracle;
     MockAdapter public adapter;
     MockERC20 public usdc;
 
@@ -41,11 +39,10 @@ contract SepehrCoreAdminTest is Test {
 
     function setUp() public {
         owner = address(this);
-        oracle = new MockOracle();
         adapter = new MockAdapter();
         usdc = new MockERC20("USD Coin", "USDC");
 
-        core = new SepehrCore(owner, timelock, guardian, address(oracle), address(usdc), 500e8);
+        core = new SepehrCore(owner, timelock, guardian, address(usdc), 500e8);
     }
 
     // ─── addAdapter ─────────────────────────────────────────────
@@ -267,6 +264,21 @@ contract SepehrCoreAdminTest is Test {
         assertEq(core.TIER_FEE_BPS(3), 2);
     }
 
+    /// @dev A8: timelock cannot raise any tier fee above `MAX_TIER_FEE_BPS` (1%).
+    function test_setTierFeeBps_revertsAboveMaxFeeBps() public {
+        uint256 max = core.MAX_TIER_FEE_BPS();
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.TierFeeBpsTooHigh.selector, max + 1, max));
+        vm.prank(timelock);
+        core.setTierFeeBps(1, max + 1);
+    }
+
+    function test_setTierFeeBps_allowsExactlyMaxFeeBps() public {
+        uint256 max = core.MAX_TIER_FEE_BPS();
+        vm.prank(timelock);
+        core.setTierFeeBps(2, max);
+        assertEq(core.TIER_FEE_BPS(1), max);
+    }
+
     // ─── pause ──────────────────────────────────────────────────
 
     function test_pause_byGuardian() public {
@@ -274,25 +286,29 @@ contract SepehrCoreAdminTest is Test {
         core.pause();
 
         assertTrue(core.paused());
+        assertEq(core.pausedUntil(), block.timestamp + core.MAX_PAUSE_DURATION());
     }
 
     function test_pause_byOwner() public {
         core.pause();
 
         assertTrue(core.paused());
+        assertEq(core.pausedUntil(), block.timestamp + core.MAX_PAUSE_DURATION());
     }
 
     function test_pause_emitsEvent_fromGuardian() public {
-        vm.expectEmit(true, false, false, false, address(core));
-        emit SepehrEvents.EmergencyPaused(guardian);
+        uint256 expectedUntil = block.timestamp + core.MAX_PAUSE_DURATION();
+        vm.expectEmit(true, false, false, true, address(core));
+        emit SepehrEvents.EmergencyPaused(guardian, expectedUntil);
 
         vm.prank(guardian);
         core.pause();
     }
 
     function test_pause_emitsEvent_fromOwner() public {
-        vm.expectEmit(true, false, false, false, address(core));
-        emit SepehrEvents.EmergencyPaused(owner);
+        uint256 expectedUntil = block.timestamp + core.MAX_PAUSE_DURATION();
+        vm.expectEmit(true, false, false, true, address(core));
+        emit SepehrEvents.EmergencyPaused(owner, expectedUntil);
 
         core.pause();
     }
@@ -304,6 +320,34 @@ contract SepehrCoreAdminTest is Test {
         core.pause();
     }
 
+    /// @dev A11: the pause must auto-expire after `MAX_PAUSE_DURATION`. Without this, a
+    /// compromised owner/guardian can indefinitely censor user-facing functions.
+    function test_pause_autoExpiresAfterMaxDuration() public {
+        core.pause();
+        assertTrue(core.paused());
+
+        vm.warp(block.timestamp + core.MAX_PAUSE_DURATION());
+        assertFalse(core.paused(), "pause must auto-expire exactly at MAX_PAUSE_DURATION");
+    }
+
+    function test_pause_stillActiveJustBeforeExpiry() public {
+        core.pause();
+        vm.warp(block.timestamp + core.MAX_PAUSE_DURATION() - 1);
+        assertTrue(core.paused(), "pause must still be active 1s before expiry");
+    }
+
+    function test_pause_rePauseExtendsExpiry() public {
+        core.pause();
+        uint256 firstUntil = core.pausedUntil();
+
+        vm.warp(block.timestamp + 1 days);
+        core.pause();
+        uint256 secondUntil = core.pausedUntil();
+
+        assertGt(secondUntil, firstUntil, "re-pause must extend expiry");
+        assertEq(secondUntil, block.timestamp + core.MAX_PAUSE_DURATION());
+    }
+
     // ─── unpause ────────────────────────────────────────────────
 
     function test_unpause_byOwner() public {
@@ -312,6 +356,7 @@ contract SepehrCoreAdminTest is Test {
 
         core.unpause();
         assertFalse(core.paused());
+        assertEq(core.pausedUntil(), 0);
     }
 
     function test_unpause_emitsEvent() public {
@@ -512,22 +557,17 @@ contract SepehrCoreAdminTest is Test {
 
     function test_constructor_revertsOnZeroTimelock() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, address(0), guardian, address(oracle), address(usdc), 500e8);
+        new SepehrCore(owner, address(0), guardian, address(usdc), 500e8);
     }
 
     function test_constructor_revertsOnZeroGuardian() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, timelock, address(0), address(oracle), address(usdc), 500e8);
-    }
-
-    function test_constructor_revertsOnZeroOracle() public {
-        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, timelock, guardian, address(0), address(usdc), 500e8);
+        new SepehrCore(owner, timelock, address(0), address(usdc), 500e8);
     }
 
     function test_constructor_revertsOnZeroUsdc() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, timelock, guardian, address(oracle), address(0), 500e8);
+        new SepehrCore(owner, timelock, guardian, address(0), 500e8);
     }
 
     function test_constructor_setsInitialValues() public {
@@ -536,6 +576,33 @@ contract SepehrCoreAdminTest is Test {
         assertEq(core.minCollateralUsd(), 500e8);
         assertEq(address(core.usdc()), address(usdc));
         assertEq(core.owner(), owner);
+    }
+
+    // ─── setMinCollateralUsd (A7) ───────────────────────────────
+
+    function test_setMinCollateralUsd_viaTimelock() public {
+        vm.prank(timelock);
+        core.setMinCollateralUsd(1000e8);
+        assertEq(core.minCollateralUsd(), 1000e8);
+    }
+
+    function test_setMinCollateralUsd_revertsOnNonTimelock() public {
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
+        core.setMinCollateralUsd(1000e8);
+    }
+
+    function test_setMinCollateralUsd_emitsEvent() public {
+        vm.expectEmit(false, false, false, true, address(core));
+        emit SepehrEvents.MinCollateralUsdUpdated(500e8, 250e8);
+
+        vm.prank(timelock);
+        core.setMinCollateralUsd(250e8);
+    }
+
+    function test_setMinCollateralUsd_allowsZeroToDisableGate() public {
+        vm.prank(timelock);
+        core.setMinCollateralUsd(0);
+        assertEq(core.minCollateralUsd(), 0);
     }
 
     // ─── Tier pricing defaults ──────────────────────────────────

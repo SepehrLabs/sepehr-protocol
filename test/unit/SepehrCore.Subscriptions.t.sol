@@ -9,7 +9,6 @@ import {SepehrCore} from "../../src/SepehrCore.sol";
 import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
 import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
 import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
-import {MockOracle} from "../../src/mocks/MockOracle.sol";
 
 contract MockERC20 is ERC20 {
     constructor(
@@ -31,7 +30,6 @@ contract MockERC20 is ERC20 {
 
 contract SepehrCoreSubscriptionsTest is Test {
     SepehrCore public core;
-    MockOracle public oracle;
     MockERC20 public usdc;
 
     address public timelock = makeAddr("timelock");
@@ -51,10 +49,9 @@ contract SepehrCoreSubscriptionsTest is Test {
     uint256 constant WATCHTOWER_ANNUAL = 1_920_000_000;
 
     function setUp() public {
-        oracle = new MockOracle();
         usdc = new MockERC20("USD Coin", "USDC");
 
-        core = new SepehrCore(address(this), timelock, guardian, address(oracle), address(usdc), 500e8);
+        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 500e8);
 
         usdc.mint(alice, 10_000e6);
         usdc.mint(bob, 10_000e6);
@@ -462,5 +459,48 @@ contract SepehrCoreSubscriptionsTest is Test {
 
         assertEq(subAlice.tier, 1);
         assertEq(subBob.tier, 3);
+    }
+
+    // ─── A10: withdrawOwnerFees hardcodes destination to owner() ──
+
+    /// @dev A10: the previous signature accepted an arbitrary `to` address — a compromised
+    /// owner key could drain all accrued subscription revenue to a private wallet in a single
+    /// transaction. The fix removes the parameter and always sends to the current `owner()`,
+    /// so an adversarial transfer requires `transferOwnership` + `acceptOwnership` on the
+    /// Ownable2Step path first, which gives users at least one block of observability.
+    function test_withdrawOwnerFees_sendsOnlyToCurrentOwner() public {
+        vm.prank(alice);
+        core.subscribe(1, false); // 9_000_000 USDC accrued to ownerFeeBalances
+
+        address ownerAddr = core.owner();
+        uint256 ownerBalBefore = usdc.balanceOf(ownerAddr);
+
+        // Event must carry `to = owner()`, not some arbitrary recipient.
+        vm.expectEmit(true, true, false, true, address(core));
+        emit SepehrEvents.OwnerFeesWithdrawn(address(usdc), ownerAddr, SHIELD_MONTHLY);
+
+        core.withdrawOwnerFees(address(usdc));
+
+        assertEq(usdc.balanceOf(ownerAddr) - ownerBalBefore, SHIELD_MONTHLY);
+        assertEq(core.ownerFeeBalances(address(usdc)), 0);
+    }
+
+    function test_withdrawOwnerFees_revertsFromNonOwner() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+
+        vm.expectRevert(SepehrErrors.NotOwner.selector);
+        vm.prank(alice);
+        core.withdrawOwnerFees(address(usdc));
+    }
+
+    function test_withdrawOwnerFees_revertsOnZeroAsset() public {
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        core.withdrawOwnerFees(address(0));
+    }
+
+    function test_withdrawOwnerFees_revertsOnZeroBalance() public {
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
+        core.withdrawOwnerFees(address(usdc));
     }
 }

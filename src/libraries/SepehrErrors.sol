@@ -30,6 +30,7 @@ library SepehrErrors {
     error ThresholdTooLow(uint256 threshold, uint256 minimum);
     error RepayPercentTooHigh(uint256 bps, uint256 maxBps);
     error InvalidSlippage(uint256 bps);
+    error TierFeeBpsTooHigh(uint256 bps, uint256 maxBps);
 
     error AdapterNotRegistered(bytes32 protocolKey);
     error AdapterAlreadyRegistered(bytes32 protocolKey);

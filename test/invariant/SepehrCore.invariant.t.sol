@@ -8,12 +8,10 @@ import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockDex} from "../../src/mocks/MockDex.sol";
 import {MockFlashLoan} from "../../src/mocks/MockFlashLoan.sol";
-import {MockOracle} from "../../src/mocks/MockOracle.sol";
 import {InvariantERC20, SepehrCoreHandler} from "./SepehrCoreHandler.sol";
 
 contract SepehrCoreInvariantTest is Test {
     SepehrCore public core;
-    MockOracle public oracle;
     InvariantERC20 public usdc;
     InvariantERC20 public weth;
     MockAdapter public adapter;
@@ -29,14 +27,13 @@ contract SepehrCoreInvariantTest is Test {
     bytes32 public constant PROTOCOL_KEY = keccak256("aave-v3-eth");
 
     function setUp() public {
-        oracle = new MockOracle();
         usdc = new InvariantERC20("USD Coin", "USDC");
         weth = new InvariantERC20("Wrapped Ether", "WETH");
         adapter = new MockAdapter();
         flashLoan = new MockFlashLoan();
         dex = new MockDex();
 
-        core = new SepehrCore(owner, timelock, guardian, address(oracle), address(usdc), 500e8);
+        core = new SepehrCore(owner, timelock, guardian, address(usdc), 500e8);
 
         vm.startPrank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));

@@ -5,7 +5,6 @@ import {Script, console} from "forge-std/Script.sol";
 
 import {SepehrCore} from "../src/SepehrCore.sol";
 import {SepehrTimelock} from "../src/SepehrTimelock.sol";
-import {MockOracle} from "../src/mocks/MockOracle.sol";
 
 contract DeployCore is Script {
     function run() external {
@@ -15,7 +14,6 @@ contract DeployCore is Script {
         address usdcAddress = vm.envAddress("USDC_ADDRESS");
         uint256 timelockDelay = vm.envOr("SEPEHR_TIMELOCK_DELAY_SECONDS", uint256(172_800));
         uint256 minCollateralUsd = vm.envOr("SEPEHR_MIN_COLLATERAL_USD", uint256(500e8));
-        bool useMockOracle = vm.envOr("USE_MOCK_ORACLE", false);
 
         vm.startBroadcast(deployer);
 
@@ -27,17 +25,7 @@ contract DeployCore is Script {
         SepehrTimelock timelock = new SepehrTimelock(timelockDelay, proposers, executors, owner);
         console.log("SepehrTimelock deployed at:", address(timelock));
 
-        address oracleAddr;
-        if (useMockOracle) {
-            MockOracle oracle = new MockOracle();
-            oracleAddr = address(oracle);
-            console.log("MockOracle deployed at:", oracleAddr);
-        } else {
-            oracleAddr = vm.envAddress("SUBSCRIPTION_ORACLE");
-        }
-
-        SepehrCore core =
-            new SepehrCore(owner, address(timelock), pauseGuardian, oracleAddr, usdcAddress, minCollateralUsd);
+        SepehrCore core = new SepehrCore(owner, address(timelock), pauseGuardian, usdcAddress, minCollateralUsd);
         console.log("SepehrCore deployed at:", address(core));
 
         vm.stopBroadcast();

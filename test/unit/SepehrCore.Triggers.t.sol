@@ -13,7 +13,6 @@ import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockDex} from "../../src/mocks/MockDex.sol";
 import {MockFlashLoan} from "../../src/mocks/MockFlashLoan.sol";
-import {MockOracle} from "../../src/mocks/MockOracle.sol";
 
 contract MockERC20 is ERC20 {
     constructor(
@@ -31,7 +30,6 @@ contract MockERC20 is ERC20 {
 
 contract SepehrCoreTriggersTest is Test {
     SepehrCore public core;
-    MockOracle public oracle;
     MockAdapter public adapter;
     MockFlashLoan public flashLoan;
     MockDex public dex;
@@ -59,7 +57,6 @@ contract SepehrCoreTriggersTest is Test {
     function setUp() public {
         vm.warp(10_000);
 
-        oracle = new MockOracle();
         adapter = new MockAdapter();
         flashLoan = new MockFlashLoan();
         dex = new MockDex();
@@ -67,7 +64,9 @@ contract SepehrCoreTriggersTest is Test {
         debtToken = new MockERC20("Debt Token", "DEBT");
         collateralToken = new MockERC20("Collateral Token", "COLL");
 
-        core = new SepehrCore(address(this), timelock, guardian, address(oracle), address(usdc), 500e8);
+        // A7 gate intentionally disabled (0) for trigger-path tests; the gate is exercised
+        // separately in the Admin and Subscriptions suites where it is load-bearing.
+        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 0);
 
         vm.startPrank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
@@ -101,6 +100,50 @@ contract SepehrCoreTriggersTest is Test {
         address[] memory providers = new address[](1);
         providers[0] = address(flashLoan);
         return providers;
+    }
+
+    // ─── A7: minCollateralUsd gate in enableProtection ─────────────
+
+    /// @dev A7: once the timelock sets `minCollateralUsd > 0`, `enableProtection` must
+    /// reject users whose adapter-reported collateral is below the floor. Without this
+    /// the tier tagging is meaningless for triggers against dust positions.
+    function test_enableProtection_revertsWhenCollateralBelowMin() public {
+        vm.prank(timelock);
+        core.setMinCollateralUsd(1000e8); // $1,000 floor
+
+        adapter.setCollateralValueUsd(bob, 500e8); // $500, below floor
+        adapter.setDelegation(bob, true);
+
+        // Give bob a Shield subscription so the gate — not the subscription check — is what reverts.
+        usdc.mint(bob, 200e6);
+        vm.prank(bob);
+        usdc.approve(address(core), type(uint256).max);
+        vm.prank(bob);
+        core.subscribe(1, false);
+
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.BelowMinimumCollateral.selector, 500e8, 1000e8));
+        vm.prank(bob);
+        core.enableProtection(PROTOCOL_KEY, THRESHOLD_HF, 250, 2500);
+    }
+
+    function test_enableProtection_succeedsWhenCollateralAtMin() public {
+        vm.prank(timelock);
+        core.setMinCollateralUsd(1000e8);
+
+        adapter.setCollateralValueUsd(bob, 1000e8);
+        adapter.setDelegation(bob, true);
+
+        usdc.mint(bob, 200e6);
+        vm.prank(bob);
+        usdc.approve(address(core), type(uint256).max);
+        vm.prank(bob);
+        core.subscribe(1, false);
+
+        vm.prank(bob);
+        core.enableProtection(PROTOCOL_KEY, THRESHOLD_HF, 250, 2500);
+
+        ISepehrCore.PositionProtection memory p = core.getProtection(bob, PROTOCOL_KEY);
+        assertTrue(p.enabled);
     }
 
     // ─── Success ────────────────────────────────────────────────
