@@ -41,8 +41,8 @@ library SepehrEvents {
 
     // ─── Fees ────────────────────────────────────────────────────
     event FeeCollected(address indexed keeper, uint256 totalFee, uint256 ownerShare, uint256 keeperShare);
-    event OwnerFeesWithdrawn(address indexed to, uint256 amount);
-    event KeeperFeesWithdrawn(address indexed keeper, uint256 amount);
+    event OwnerFeesWithdrawn(address indexed asset, address indexed to, uint256 amount);
+    event KeeperFeesWithdrawn(address indexed keeper, address indexed asset, uint256 amount);
     event TierFeeBpsUpdated(uint8 indexed tier, uint256 oldBps, uint256 newBps);
 
     // ─── Admin ───────────────────────────────────────────────────

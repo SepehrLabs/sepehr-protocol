@@ -15,15 +15,24 @@ contract CompoundV2Adapter is IProtocolAdapter {
 
     IComptroller public immutable COMPTROLLER;
     ICToken public immutable CTOKEN;
+    address public immutable core;
+
+    modifier onlyCore() {
+        if (msg.sender != core) revert SepehrErrors.NotAuthorized();
+        _;
+    }
 
     constructor(
         address comptroller,
-        address cToken
+        address cToken,
+        address _core
     ) {
         if (comptroller == address(0)) revert SepehrErrors.ZeroAddress();
         if (cToken == address(0)) revert SepehrErrors.ZeroAddress();
+        if (_core == address(0)) revert SepehrErrors.ZeroAddress();
         COMPTROLLER = IComptroller(comptroller);
         CTOKEN = ICToken(cToken);
+        core = _core;
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -48,7 +57,7 @@ contract CompoundV2Adapter is IProtocolAdapter {
         address user,
         address debtAsset,
         uint256 amount
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(CTOKEN), amount);
         CTOKEN.repayBorrowBehalf(user, amount);
@@ -60,7 +69,7 @@ contract CompoundV2Adapter is IProtocolAdapter {
         address collateralAsset,
         uint256 amount,
         address recipient
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
 

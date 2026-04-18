@@ -25,7 +25,7 @@ contract FluidAdapterForkTest is ForkTestBase {
         // Fluid vault addresses are deployment-specific and can change.
         // Use a mock vault address and mock calls to verify adapter logic.
         mockVault = makeAddr("fluidVault");
-        adapter = new FluidAdapter(mockVault);
+        adapter = new FluidAdapter(mockVault, address(this));
     }
 
     // ─── getHealthFactor ──────────────────────────────────────────────

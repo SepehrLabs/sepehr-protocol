@@ -16,6 +16,7 @@ contract CurveLlamalendAdapterTest is Test {
 
     address internal user = makeAddr("user");
     address internal recipient = makeAddr("recipient");
+    address internal core = makeAddr("core");
 
     function setUp() public {
         collateralToken = new MockERC20("WETH", "WETH");
@@ -24,24 +25,30 @@ contract CurveLlamalendAdapterTest is Test {
 
         controller = new MockCurveController(address(collateralToken), address(borrowedToken));
 
-        adapter = new CurveLlamalendAdapter(address(controller), priceOracle);
+        adapter = new CurveLlamalendAdapter(address(controller), priceOracle, core);
     }
 
     // ─── Constructor ───────────────────────────────────────────────────
 
     function test_constructor_revertsOnZeroController() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new CurveLlamalendAdapter(address(0), priceOracle);
+        new CurveLlamalendAdapter(address(0), priceOracle, core);
     }
 
     function test_constructor_revertsOnZeroPriceOracle() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new CurveLlamalendAdapter(address(controller), address(0));
+        new CurveLlamalendAdapter(address(controller), address(0), core);
+    }
+
+    function test_constructor_revertsOnZeroCore() public {
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        new CurveLlamalendAdapter(address(controller), priceOracle, address(0));
     }
 
     function test_constructor_storesImmutables() public view {
         assertEq(address(adapter.CONTROLLER()), address(controller));
         assertEq(adapter.PRICE_ORACLE(), priceOracle);
+        assertEq(adapter.core(), core);
     }
 
     // ─── getHealthFactor ───────────────────────────────────────────────
@@ -87,18 +94,26 @@ contract CurveLlamalendAdapterTest is Test {
 
     // ─── checkDelegation ───────────────────────────────────────────────
 
-    function test_checkDelegation_alwaysReturnsTrue() public view {
-        assertTrue(adapter.checkDelegation(user));
+    function test_checkDelegation_alwaysReturnsFalse() public view {
+        // Curve LLAMMA exposes no per-spender delegation primitive; the adapter must
+        // report `false` so `enableProtection` cannot be armed for unsupported positions.
+        assertFalse(adapter.checkDelegation(user));
     }
 
-    function test_checkDelegation_trueForAnyAddress() public {
-        assertTrue(adapter.checkDelegation(makeAddr("random")));
-        assertTrue(adapter.checkDelegation(address(0)));
+    function test_checkDelegation_falseForAnyAddress() public {
+        assertFalse(adapter.checkDelegation(makeAddr("random")));
+        assertFalse(adapter.checkDelegation(address(0)));
     }
 
     // ─── repay ─────────────────────────────────────────────────────────
 
+    function test_repay_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.repay(user, address(borrowedToken), 1e18);
+    }
+
     function test_repay_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.repay(user, address(borrowedToken), 0);
     }
@@ -107,6 +122,7 @@ contract CurveLlamalendAdapterTest is Test {
         uint256 amount = 100e18;
         borrowedToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(borrowedToken), amount);
 
         assertEq(controller.repayCallCount(), 1);
@@ -119,6 +135,7 @@ contract CurveLlamalendAdapterTest is Test {
         uint256 amount = 75e18;
         borrowedToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(borrowedToken), amount);
 
         assertEq(borrowedToken.balanceOf(address(controller)), amount);
@@ -127,12 +144,19 @@ contract CurveLlamalendAdapterTest is Test {
 
     // ─── withdrawCollateral ────────────────────────────────────────────
 
+    function test_withdrawCollateral_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.withdrawCollateral(user, address(collateralToken), 1e18, recipient);
+    }
+
     function test_withdrawCollateral_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 0, recipient);
     }
 
     function test_withdrawCollateral_revertsOnZeroRecipient() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 1e18, address(0));
     }
@@ -141,6 +165,7 @@ contract CurveLlamalendAdapterTest is Test {
         uint256 amount = 10e18;
         collateralToken.mint(address(controller), amount);
 
+        vm.prank(core);
         adapter.withdrawCollateral(user, address(collateralToken), amount, recipient);
 
         assertEq(controller.removeCollateralCallCount(), 1);
@@ -152,6 +177,7 @@ contract CurveLlamalendAdapterTest is Test {
         uint256 amount = 5e18;
         collateralToken.mint(address(controller), amount);
 
+        vm.prank(core);
         adapter.withdrawCollateral(user, address(collateralToken), amount, recipient);
 
         assertEq(collateralToken.balanceOf(recipient), amount);
@@ -210,6 +236,7 @@ contract CurveLlamalendAdapterTest is Test {
         amount = bound(amount, 1, type(uint128).max);
         borrowedToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(borrowedToken), amount);
 
         assertEq(controller.repayCallCount(), 1);

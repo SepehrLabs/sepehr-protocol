@@ -30,7 +30,7 @@ contract CurveLlamalendAdapterForkTest is ForkTestBase {
         // deep protocol setup.
         mockController = makeAddr("curveController");
         address mockOracle = makeAddr("curvePriceOracle");
-        adapter = new CurveLlamalendAdapter(mockController, mockOracle);
+        adapter = new CurveLlamalendAdapter(mockController, mockOracle, address(this));
     }
 
     // ─── getHealthFactor ──────────────────────────────────────────────

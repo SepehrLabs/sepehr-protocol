@@ -16,6 +16,7 @@ contract AaveV3AdapterTest is Test {
 
     address internal user = makeAddr("user");
     address internal recipient = makeAddr("recipient");
+    address internal core = makeAddr("core");
 
     function setUp() public {
         debtToken = new MockERC20("Debt Token", "DEBT");
@@ -23,24 +24,30 @@ contract AaveV3AdapterTest is Test {
         collateralToken = new MockERC20("Collateral", "COL");
 
         pool = new MockAavePoolAdapter(address(collateralToken));
-        adapter = new AaveV3Adapter(address(pool), address(aToken));
+        adapter = new AaveV3Adapter(address(pool), address(aToken), core);
     }
 
     // ─── Constructor ───────────────────────────────────────────────────
 
     function test_constructor_revertsOnZeroPool() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new AaveV3Adapter(address(0), address(aToken));
+        new AaveV3Adapter(address(0), address(aToken), core);
     }
 
     function test_constructor_revertsOnZeroAToken() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new AaveV3Adapter(address(pool), address(0));
+        new AaveV3Adapter(address(pool), address(0), core);
+    }
+
+    function test_constructor_revertsOnZeroCore() public {
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        new AaveV3Adapter(address(pool), address(aToken), address(0));
     }
 
     function test_constructor_storesImmutables() public view {
         assertEq(address(adapter.POOL()), address(pool));
         assertEq(adapter.ATOKEN(), address(aToken));
+        assertEq(adapter.core(), core);
     }
 
     // ─── getHealthFactor ───────────────────────────────────────────────
@@ -91,7 +98,13 @@ contract AaveV3AdapterTest is Test {
 
     // ─── repay ─────────────────────────────────────────────────────────
 
+    function test_repay_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.repay(user, address(debtToken), 1e18);
+    }
+
     function test_repay_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.repay(user, address(debtToken), 0);
     }
@@ -100,6 +113,7 @@ contract AaveV3AdapterTest is Test {
         uint256 amount = 100e18;
         debtToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(debtToken), amount);
 
         assertEq(pool.repayCallCount(), 1);
@@ -114,6 +128,7 @@ contract AaveV3AdapterTest is Test {
         uint256 amount = 50e18;
         debtToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(debtToken), amount);
 
         assertEq(debtToken.balanceOf(address(pool)), amount);
@@ -122,12 +137,19 @@ contract AaveV3AdapterTest is Test {
 
     // ─── withdrawCollateral ────────────────────────────────────────────
 
+    function test_withdrawCollateral_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.withdrawCollateral(user, address(collateralToken), 1e18, recipient);
+    }
+
     function test_withdrawCollateral_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 0, recipient);
     }
 
     function test_withdrawCollateral_revertsOnZeroRecipient() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 1e18, address(0));
     }
@@ -140,6 +162,7 @@ contract AaveV3AdapterTest is Test {
         vm.prank(user);
         aToken.approve(address(adapter), amount);
 
+        vm.prank(core);
         adapter.withdrawCollateral(user, address(collateralToken), amount, recipient);
 
         // aTokens moved from user to adapter
@@ -186,6 +209,7 @@ contract AaveV3AdapterTest is Test {
         amount = bound(amount, 1, type(uint128).max);
         debtToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(debtToken), amount);
 
         assertEq(pool.repayCallCount(), 1);

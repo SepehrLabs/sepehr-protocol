@@ -16,6 +16,7 @@ contract CompoundV2AdapterTest is Test {
 
     address user = makeAddr("user");
     address recipient = makeAddr("recipient");
+    address internal core = makeAddr("core");
 
     function setUp() public {
         underlying = new MockERC20("DAI", "DAI");
@@ -24,7 +25,7 @@ contract CompoundV2AdapterTest is Test {
         comptroller.setOracle(address(oracle));
         cToken = new MockCToken("cDAI", "cDAI", address(underlying));
 
-        adapter = new CompoundV2Adapter(address(comptroller), address(cToken));
+        adapter = new CompoundV2Adapter(address(comptroller), address(cToken), core);
     }
 
     // ── Constructor ──────────────────────────────────────────────────────
@@ -32,16 +33,22 @@ contract CompoundV2AdapterTest is Test {
     function test_constructor_setsComptrollerAndCToken() public view {
         assertEq(address(adapter.COMPTROLLER()), address(comptroller));
         assertEq(address(adapter.CTOKEN()), address(cToken));
+        assertEq(adapter.core(), core);
     }
 
     function test_constructor_revertsOnZeroComptroller() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new CompoundV2Adapter(address(0), address(cToken));
+        new CompoundV2Adapter(address(0), address(cToken), core);
     }
 
     function test_constructor_revertsOnZeroCToken() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new CompoundV2Adapter(address(comptroller), address(0));
+        new CompoundV2Adapter(address(comptroller), address(0), core);
+    }
+
+    function test_constructor_revertsOnZeroCore() public {
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        new CompoundV2Adapter(address(comptroller), address(cToken), address(0));
     }
 
     // ── getHealthFactor ──────────────────────────────────────────────────
@@ -87,7 +94,13 @@ contract CompoundV2AdapterTest is Test {
 
     // ── repay ────────────────────────────────────────────────────────────
 
+    function test_repay_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.repay(user, address(underlying), 1e18);
+    }
+
     function test_repay_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.repay(user, address(underlying), 0);
     }
@@ -96,6 +109,7 @@ contract CompoundV2AdapterTest is Test {
         uint256 amount = 100e18;
         underlying.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(underlying), amount);
 
         assertEq(cToken.lastRepayBorrower(), user);
@@ -106,6 +120,7 @@ contract CompoundV2AdapterTest is Test {
         uint256 amount = 100e18;
         underlying.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(underlying), amount);
 
         assertEq(underlying.balanceOf(address(cToken)), amount);
@@ -114,12 +129,19 @@ contract CompoundV2AdapterTest is Test {
 
     // ── withdrawCollateral ───────────────────────────────────────────────
 
+    function test_withdrawCollateral_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.withdrawCollateral(user, address(underlying), 1e18, recipient);
+    }
+
     function test_withdrawCollateral_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.withdrawCollateral(user, address(underlying), 0, recipient);
     }
 
     function test_withdrawCollateral_revertsOnZeroRecipient() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(underlying), 1e18, address(0));
     }
@@ -140,6 +162,7 @@ contract CompoundV2AdapterTest is Test {
         // Give cToken contract underlying to redeem
         underlying.mint(address(cToken), withdrawAmount);
 
+        vm.prank(core);
         adapter.withdrawCollateral(user, address(underlying), withdrawAmount, recipient);
 
         assertEq(cToken.lastRedeemAmount(), withdrawAmount);
@@ -164,6 +187,7 @@ contract CompoundV2AdapterTest is Test {
         cToken.approve(address(adapter), expectedCTokenAmount);
         underlying.mint(address(cToken), withdrawAmount);
 
+        vm.prank(core);
         adapter.withdrawCollateral(user, address(underlying), withdrawAmount, recipient);
 
         assertEq(underlying.balanceOf(recipient), withdrawAmount);
@@ -228,6 +252,7 @@ contract CompoundV2AdapterTest is Test {
         vm.assume(amount > 0);
         underlying.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(underlying), amount);
 
         assertEq(cToken.lastRepayAmount(), amount);

@@ -77,11 +77,19 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     mapping(address => mapping(bytes32 => PositionProtection)) internal _protections;
     mapping(address => uint256) public lastTriggerTime;
 
-    uint256 public ownerFeeBalance;
-    mapping(address => uint256) public keeperFeeBalances;
+    /// @notice Accrued protocol-owner revenue per token address (debt asset of triggers, USDC for subscriptions).
+    /// @dev Per-asset accounting is mandatory because trigger fees accrue in whatever debt asset the user
+    /// was borrowing (DAI, WETH, USDT, …), while subscriptions always accrue in USDC. Collapsing these
+    /// into a single accumulator would conflate denominations.
+    mapping(address asset => uint256 amount) public ownerFeeBalances;
+
+    /// @notice Accrued keeper revenue per keeper and per asset (debt asset of the trigger).
+    mapping(address keeper => mapping(address asset => uint256 amount)) public keeperFeeBalances;
+
     mapping(address => uint256) public saveCredits;
 
     address private _activeFlashProvider;
+    bytes32 private _activeSessionHash;
 
     // ─── Modifiers ───────────────────────────────────────────────
     modifier whenNotPaused() {
@@ -142,6 +150,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
         uint256 price = annual ? TIER_PRICES_ANNUAL_USD_6[tier - 1] : TIER_PRICES_MONTHLY_USD_6[tier - 1];
         usdc.safeTransferFrom(msg.sender, address(this), price);
+        ownerFeeBalances[address(usdc)] += price;
 
         uint256 duration = annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
         _subscriptions[msg.sender] = Subscription({
@@ -159,6 +168,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
         uint256 price = sub.annual ? TIER_PRICES_ANNUAL_USD_6[sub.tier - 1] : TIER_PRICES_MONTHLY_USD_6[sub.tier - 1];
         usdc.safeTransferFrom(msg.sender, address(this), price);
+        ownerFeeBalances[address(usdc)] += price;
 
         uint256 duration = sub.annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
         uint256 baseTime = sub.expiresAt > block.timestamp ? sub.expiresAt : block.timestamp;
@@ -294,7 +304,9 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             userFeeBps
         );
 
+        _activeSessionHash = keccak256(callbackData);
         _borrowFlashLoan(flashProviders, debtAsset, repayAmount, callbackData);
+        _activeSessionHash = bytes32(0);
 
         uint256 hfAfter = entry.adapter.getHealthFactor(user);
         if (hfAfter < prot.thresholdHF) {
@@ -304,8 +316,11 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         uint256 totalFee = Percentages.applyBps(repayAmount, userFeeBps);
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(totalFee);
 
-        ownerFeeBalance += ownerShare;
-        keeperFeeBalances[msg.sender] += keeperShare;
+        // Fees accrue in the debt asset of this trigger. Per-asset accounting is required because
+        // debt assets vary across protocols (DAI, WETH, USDT, crvUSD, …); a single uint counter
+        // would mix denominations and corrupt withdrawal math.
+        ownerFeeBalances[debtAsset] += ownerShare;
+        keeperFeeBalances[msg.sender][debtAsset] += keeperShare;
 
         saveCredits[user] += repayValueUsd6;
 
@@ -324,6 +339,9 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         bytes calldata data
     ) external override {
         if (msg.sender != _activeFlashProvider) {
+            revert SepehrErrors.InvalidFlashLoanCallback();
+        }
+        if (keccak256(data) != _activeSessionHash) {
             revert SepehrErrors.InvalidFlashLoanCallback();
         }
 
@@ -365,32 +383,55 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
     // ─── Fees ────────────────────────────────────────────────────
 
+    /// @notice Withdraw the protocol owner's accrued revenue for a specific asset.
+    /// @dev Owner-only because the funds belong to the protocol treasury. The asset must be provided
+    /// because per-asset accounting holds separate balances for subscription USDC and each debt
+    /// asset (DAI, WETH, USDT, …) collected from triggers. Reverts if the per-asset balance is zero.
+    /// @param asset The ERC-20 address to withdraw (e.g. USDC for subscription revenue, or the debt
+    /// asset of a protected position for trigger fees).
+    /// @param to The address that will receive the accrued tokens.
     function withdrawOwnerFees(
+        address asset,
         address to
     ) external nonReentrant {
         if (msg.sender != owner()) revert SepehrErrors.NotOwner();
-        uint256 amount = ownerFeeBalance;
+        if (asset == address(0)) revert SepehrErrors.ZeroAddress();
+        if (to == address(0)) revert SepehrErrors.ZeroAddress();
+        uint256 amount = ownerFeeBalances[asset];
         if (amount == 0) revert SepehrErrors.ZeroAmount();
-        ownerFeeBalance = 0;
-        usdc.safeTransfer(to, amount);
-        emit SepehrEvents.OwnerFeesWithdrawn(to, amount);
+        ownerFeeBalances[asset] = 0;
+        IERC20(asset).safeTransfer(to, amount);
+        emit SepehrEvents.OwnerFeesWithdrawn(asset, to, amount);
     }
 
-    function withdrawKeeperFees() external nonReentrant {
-        uint256 amount = keeperFeeBalances[msg.sender];
+    /// @notice Withdraw the caller's accrued keeper-share revenue for a specific asset.
+    /// @dev Restricted implicitly by per-keeper accounting: only the keeper that earned a fee can claim it.
+    /// Asset must be provided because a keeper may have accrued fees across multiple debt assets.
+    /// @param asset The ERC-20 address to withdraw (the debt asset of the trigger that paid the keeper).
+    function withdrawKeeperFees(
+        address asset
+    ) external nonReentrant {
+        if (asset == address(0)) revert SepehrErrors.ZeroAddress();
+        uint256 amount = keeperFeeBalances[msg.sender][asset];
         if (amount == 0) revert SepehrErrors.ZeroAmount();
-        keeperFeeBalances[msg.sender] = 0;
-        usdc.safeTransfer(msg.sender, amount);
-        emit SepehrEvents.KeeperFeesWithdrawn(msg.sender, amount);
+        keeperFeeBalances[msg.sender][asset] = 0;
+        IERC20(asset).safeTransfer(msg.sender, amount);
+        emit SepehrEvents.KeeperFeesWithdrawn(msg.sender, asset, amount);
     }
 
     // ─── Pause ───────────────────────────────────────────────────
 
+    /// @notice Emergency-pause all user-facing and keeper mutations.
+    /// @dev Callable by the owner or the pause guardian so the contract can be frozen quickly
+    /// in response to an incident without waiting for the 48h timelock.
     function pause() external onlyPauseGuardianOrOwner {
         paused = true;
         emit SepehrEvents.EmergencyPaused(msg.sender);
     }
 
+    /// @notice Resume the contract after a pause.
+    /// @dev Owner-only to ensure the pause guardian cannot unilaterally un-pause after the owner
+    /// has investigated an incident.
     function unpause() external {
         if (msg.sender != owner()) revert SepehrErrors.NotOwner();
         paused = false;
@@ -399,6 +440,11 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
     // ─── Admin (Timelock-gated) ──────────────────────────────────
 
+    /// @notice Register a new protocol adapter under the given key.
+    /// @dev Timelock-gated (48h delay) because a malicious adapter could drain user collateral
+    /// during trigger execution. Reverts if an adapter is already registered for the key.
+    /// @param protocolKey Unique identifier for the protocol (e.g. keccak256("aave-v3-ethereum")).
+    /// @param adapter Address of the contract implementing IProtocolAdapter.
     function addAdapter(
         bytes32 protocolKey,
         address adapter
@@ -412,6 +458,10 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.AdapterAdded(protocolKey, adapter);
     }
 
+    /// @notice Unregister a previously-added protocol adapter.
+    /// @dev Timelock-gated because removing an adapter disables protection for every user
+    /// relying on it. Users should be notified before removal.
+    /// @param protocolKey Identifier of the adapter to remove.
     function removeAdapter(
         bytes32 protocolKey
     ) external onlyTimelock {
@@ -422,6 +472,11 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.AdapterRemoved(protocolKey);
     }
 
+    /// @notice Toggle the enabled flag on a registered adapter without removing it.
+    /// @dev Timelock-gated. Disabling prevents new protections and new triggers on the adapter
+    /// while preserving historical state (addedAt, registration).
+    /// @param protocolKey Identifier of the adapter to toggle.
+    /// @param enabled True to activate, false to pause the adapter.
     function setAdapterEnabled(
         bytes32 protocolKey,
         bool enabled
@@ -437,6 +492,10 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         }
     }
 
+    /// @notice Authorize an address to call `execute` as a keeper.
+    /// @dev Timelock-gated because keepers receive 15% of trigger fees and can invoke flash loans;
+    /// adding an untrusted keeper would be a significant attack vector.
+    /// @param keeper Address to grant keeper role.
     function addKeeper(
         address keeper
     ) external onlyTimelock {
@@ -445,6 +504,9 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.KeeperAdded(keeper);
     }
 
+    /// @notice Revoke keeper privileges from an address.
+    /// @dev Timelock-gated. Already-accrued fees remain claimable by the keeper via `withdrawKeeperFees`.
+    /// @param keeper Address to revoke.
     function removeKeeper(
         address keeper
     ) external onlyTimelock {
@@ -452,6 +514,11 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.KeeperRemoved(keeper);
     }
 
+    /// @notice Update the trigger fee (in basis points) charged to subscribers of a given tier.
+    /// @dev Timelock-gated because fees directly affect economics for all existing subscribers;
+    /// changes should go through governance and announcement before taking effect.
+    /// @param tier Tier index in [1, 4]; reverts otherwise.
+    /// @param newBps Replacement fee in basis points applied to the repaid amount.
     function setTierFeeBps(
         uint8 tier,
         uint256 newBps
@@ -462,7 +529,11 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.TierFeeBpsUpdated(tier, old, newBps);
     }
 
-    /// @notice Grant a Titan (tier 4) subscription. Owner-only, no USDC charge.
+    /// @notice Grant a Titan (tier 4) subscription free of charge.
+    /// @dev Owner-only (not timelock) so strategic partners, audits, or bounty recipients can be
+    /// onboarded reactively. Cannot be self-subscribed through `subscribe`.
+    /// @param user Recipient of the Titan subscription.
+    /// @param durationSeconds Length of the subscription starting from now.
     function grantTitanSubscription(
         address user,
         uint256 durationSeconds
@@ -478,6 +549,10 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.TitanSubscriptionGranted(user, block.timestamp + durationSeconds);
     }
 
+    /// @notice Whitelist a flash loan provider for use during trigger execution.
+    /// @dev Timelock-gated because the callback `onFlashLoan` trusts `msg.sender` to be the active
+    /// provider; whitelisting a malicious contract would let it forge callbacks.
+    /// @param provider Address of an IFlashLoanProvider implementation.
     function addFlashLoanProvider(
         address provider
     ) external onlyTimelock {
@@ -486,6 +561,9 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.FlashLoanProviderAdded(provider);
     }
 
+    /// @notice Remove a flash loan provider from the whitelist.
+    /// @dev Timelock-gated. Pending executions continue using the provider until the next block.
+    /// @param provider Address to delist.
     function removeFlashLoanProvider(
         address provider
     ) external onlyTimelock {
@@ -493,6 +571,10 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.FlashLoanProviderRemoved(provider);
     }
 
+    /// @notice Whitelist a DEX router used for collateral→debt swaps during execution.
+    /// @dev Timelock-gated because the router receives collateral approvals and is trusted to
+    /// honor the `minOut` amount; a malicious router could drain positions.
+    /// @param router Address of an IDexRouter implementation.
     function addDexRouter(
         address router
     ) external onlyTimelock {
@@ -500,12 +582,19 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         allowedDexRouters[router] = true;
     }
 
+    /// @notice Remove a DEX router from the whitelist.
+    /// @dev Timelock-gated. Executions that specify a delisted router in `dexRouter` will revert.
+    /// @param router Address to delist.
     function removeDexRouter(
         address router
     ) external onlyTimelock {
         allowedDexRouters[router] = false;
     }
 
+    /// @notice Rotate the pause-guardian role to a new address.
+    /// @dev Timelock-gated so the guardian cannot be swapped unilaterally by a compromised owner
+    /// without the 48h delay announcing it on-chain.
+    /// @param newGuardian Replacement guardian address.
     function setPauseGuardian(
         address newGuardian
     ) external onlyTimelock {

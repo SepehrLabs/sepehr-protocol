@@ -10,16 +10,29 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 /// @title CompoundV3Adapter
 /// @notice Protocol adapter for Compound V3 (Comet) positions. Calculates health
 ///         factors from on-chain collateral data and handles repay/withdraw via Comet.
+/// @dev Trust boundary: Comet's `allow` grants this adapter full manager rights on the
+///      underlying market (supplyTo, withdrawFrom, transferFrom). Containment relies on
+///      `onlyCore` gating every state-changing function and no escape hatch being added
+///      outside IProtocolAdapter. Any new mutator must be `onlyCore` or a pure no-op.
 contract CompoundV3Adapter is IProtocolAdapter {
     using SafeERC20 for IERC20;
 
     IComet public immutable COMET;
+    address public immutable core;
+
+    modifier onlyCore() {
+        if (msg.sender != core) revert SepehrErrors.NotAuthorized();
+        _;
+    }
 
     constructor(
-        address comet
+        address comet,
+        address _core
     ) {
         if (comet == address(0)) revert SepehrErrors.ZeroAddress();
+        if (_core == address(0)) revert SepehrErrors.ZeroAddress();
         COMET = IComet(comet);
+        core = _core;
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -59,7 +72,7 @@ contract CompoundV3Adapter is IProtocolAdapter {
         address user,
         address debtAsset,
         uint256 amount
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(COMET), amount);
         COMET.supplyTo(user, debtAsset, amount);
@@ -71,7 +84,7 @@ contract CompoundV3Adapter is IProtocolAdapter {
         address collateralAsset,
         uint256 amount,
         address recipient
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         COMET.withdrawFrom(user, recipient, collateralAsset, amount);

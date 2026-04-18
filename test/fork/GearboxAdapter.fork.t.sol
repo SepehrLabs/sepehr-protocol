@@ -28,7 +28,7 @@ contract GearboxAdapterForkTest is ForkTestBase {
         mockCreditAccount = makeAddr("gearboxCreditAccount");
         mockFacade = makeAddr("gearboxFacade");
 
-        adapter = new GearboxAdapter(mockCreditManager, mockBotList);
+        adapter = new GearboxAdapter(mockCreditManager, mockBotList, address(this));
     }
 
     // ─── getHealthFactor ──────────────────────────────────────────────

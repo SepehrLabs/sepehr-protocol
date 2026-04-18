@@ -15,15 +15,24 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
 
     ICurveController public immutable CONTROLLER;
     address public immutable PRICE_ORACLE;
+    address public immutable core;
+
+    modifier onlyCore() {
+        if (msg.sender != core) revert SepehrErrors.NotAuthorized();
+        _;
+    }
 
     constructor(
         address controller,
-        address priceOracle
+        address priceOracle,
+        address _core
     ) {
         if (controller == address(0)) revert SepehrErrors.ZeroAddress();
         if (priceOracle == address(0)) revert SepehrErrors.ZeroAddress();
+        if (_core == address(0)) revert SepehrErrors.ZeroAddress();
         CONTROLLER = ICurveController(controller);
         PRICE_ORACLE = priceOracle;
+        core = _core;
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -38,13 +47,16 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Curve LLAMMA does not expose a per-spender delegation primitive: `repay` and
+    ///      `remove_collateral` operate on `msg.sender`'s own position. A third-party adapter
+    ///      cannot legitimately act on a user's behalf without ownership transfer, so this
+    ///      check returns `false` to make the constraint enforceable in `enableProtection`.
+    ///      Until a delegation pathway is added on Curve's side, the adapter cannot be enabled
+    ///      for live protection.
     function checkDelegation(
-        address user
-    ) external view returns (bool delegated) {
-        // Curve Llamalend does not expose an on-chain delegation mechanism.
-        // The user must approve the adapter through the controller's access pattern.
-        // Return true; execution-time auth checks will revert if unauthorized.
-        return true;
+        address /* user */
+    ) external pure returns (bool delegated) {
+        return false;
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -52,7 +64,7 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
         address user,
         address debtAsset,
         uint256 amount
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(CONTROLLER), amount);
         CONTROLLER.repay(amount, user);
@@ -64,7 +76,7 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
         address,
         uint256 amount,
         address recipient
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         // remove_collateral is owner-only in Curve. The adapter calls it, and the

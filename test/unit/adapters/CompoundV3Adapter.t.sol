@@ -19,6 +19,7 @@ contract CompoundV3AdapterTest is Test {
     address priceFeedA = makeAddr("priceFeedA");
     address priceFeedB = makeAddr("priceFeedB");
     address basePriceFeed = makeAddr("basePriceFeed");
+    address internal core = makeAddr("core");
 
     function setUp() public {
         comet = new MockComet();
@@ -28,18 +29,24 @@ contract CompoundV3AdapterTest is Test {
 
         comet.setBaseTokenPriceFeed(basePriceFeed);
 
-        adapter = new CompoundV3Adapter(address(comet));
+        adapter = new CompoundV3Adapter(address(comet), core);
     }
 
     // ── Constructor ──────────────────────────────────────────────────────
 
     function test_constructor_setsComet() public view {
         assertEq(address(adapter.COMET()), address(comet));
+        assertEq(adapter.core(), core);
     }
 
     function test_constructor_revertsOnZeroAddress() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new CompoundV3Adapter(address(0));
+        new CompoundV3Adapter(address(0), core);
+    }
+
+    function test_constructor_revertsOnZeroCore() public {
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        new CompoundV3Adapter(address(comet), address(0));
     }
 
     // ── getHealthFactor ──────────────────────────────────────────────────
@@ -132,7 +139,13 @@ contract CompoundV3AdapterTest is Test {
 
     // ── repay ────────────────────────────────────────────────────────────
 
+    function test_repay_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.repay(user, address(debtToken), 1e18);
+    }
+
     function test_repay_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.repay(user, address(debtToken), 0);
     }
@@ -141,6 +154,7 @@ contract CompoundV3AdapterTest is Test {
         uint256 repayAmount = 500e6;
         debtToken.mint(address(adapter), repayAmount);
 
+        vm.prank(core);
         adapter.repay(user, address(debtToken), repayAmount);
 
         assertEq(comet.lastSupplyToDst(), user);
@@ -152,6 +166,7 @@ contract CompoundV3AdapterTest is Test {
         uint256 repayAmount = 500e6;
         debtToken.mint(address(adapter), repayAmount);
 
+        vm.prank(core);
         adapter.repay(user, address(debtToken), repayAmount);
 
         assertEq(debtToken.balanceOf(address(comet)), repayAmount);
@@ -160,12 +175,19 @@ contract CompoundV3AdapterTest is Test {
 
     // ── withdrawCollateral ───────────────────────────────────────────────
 
+    function test_withdrawCollateral_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.withdrawCollateral(user, address(collateralA), 1e18, recipient);
+    }
+
     function test_withdrawCollateral_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.withdrawCollateral(user, address(collateralA), 0, recipient);
     }
 
     function test_withdrawCollateral_revertsOnZeroRecipient() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(collateralA), 1e18, address(0));
     }
@@ -173,6 +195,7 @@ contract CompoundV3AdapterTest is Test {
     function test_withdrawCollateral_callsWithdrawFromCorrectly() public {
         uint256 amount = 1e18;
 
+        vm.prank(core);
         adapter.withdrawCollateral(user, address(collateralA), amount, recipient);
 
         assertEq(comet.lastWithdrawFromSrc(), user);
@@ -240,6 +263,7 @@ contract CompoundV3AdapterTest is Test {
         vm.assume(amount > 0);
         debtToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(debtToken), amount);
 
         assertEq(comet.lastSupplyToAmount(), amount);
@@ -267,6 +291,7 @@ contract CompoundV3AdapterTest is Test {
         vm.assume(amount > 0);
         vm.assume(rcpt != address(0));
 
+        vm.prank(core);
         adapter.withdrawCollateral(user, address(collateralA), amount, rcpt);
 
         assertEq(comet.lastWithdrawFromAmount(), amount);

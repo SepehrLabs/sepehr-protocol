@@ -41,7 +41,7 @@ contract CompoundV3AdapterForkTest is ForkTestBase {
         forked = _tryCreateFork("RPC_ETHEREUM_PRIMARY_HTTP");
         if (!forked) return;
 
-        adapter = new CompoundV3Adapter(COMET_USDC);
+        adapter = new CompoundV3Adapter(COMET_USDC, address(this));
         user = makeAddr("compV3User");
 
         _createCompoundPosition();

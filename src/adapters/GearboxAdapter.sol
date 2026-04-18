@@ -10,6 +10,11 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 /// @title GearboxAdapter
 /// @notice Protocol adapter for Gearbox V3 credit account positions. Uses the bot
 ///         multicall pattern for repayment and collateral withdrawal.
+/// @dev Trust boundary: Gearbox's bot-permission model is bit-masked. The adapter only
+///      needs `DECREASE_DEBT` and `WITHDRAW_COLLATERAL` and `checkDelegation` enforces
+///      that both bits are set (not merely "any permission"). This prevents a user from
+///      accidentally granting the adapter `EXTERNAL_CALLS_PERMISSION` or other over-broad
+///      permissions that could be abused if the adapter or Core were later compromised.
 contract GearboxAdapter is IProtocolAdapter {
     using SafeERC20 for IERC20;
 
@@ -19,17 +24,33 @@ contract GearboxAdapter is IProtocolAdapter {
     /// @dev calcDebtAndCollateral task for full collateral check.
     uint8 internal constant TASK_FULL_COLLATERAL_CHECK = 1;
 
+    /// @dev Gearbox V3 BotListV3 permission bits needed by this adapter. Matches the bit
+    ///      layout used by Gearbox (DECREASE_DEBT = 1 << 2, WITHDRAW_COLLATERAL = 1 << 5).
+    ///      If Gearbox revises the bit layout, update here and audit existing delegations.
+    uint192 internal constant DECREASE_DEBT_PERMISSION = 1 << 2;
+    uint192 internal constant WITHDRAW_COLLATERAL_PERMISSION = 1 << 5;
+    uint192 internal constant REQUIRED_PERMISSIONS = DECREASE_DEBT_PERMISSION | WITHDRAW_COLLATERAL_PERMISSION;
+
     ICreditManager public immutable CREDIT_MANAGER;
     IBotList public immutable BOT_LIST;
+    address public immutable core;
+
+    modifier onlyCore() {
+        if (msg.sender != core) revert SepehrErrors.NotAuthorized();
+        _;
+    }
 
     constructor(
         address creditManager,
-        address botList
+        address botList,
+        address _core
     ) {
         if (creditManager == address(0)) revert SepehrErrors.ZeroAddress();
         if (botList == address(0)) revert SepehrErrors.ZeroAddress();
+        if (_core == address(0)) revert SepehrErrors.ZeroAddress();
         CREDIT_MANAGER = ICreditManager(creditManager);
         BOT_LIST = IBotList(botList);
+        core = _core;
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -44,6 +65,10 @@ contract GearboxAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Requires the user to have granted BOTH `DECREASE_DEBT` and `WITHDRAW_COLLATERAL`
+    ///      bit permissions. Granting more is allowed (user's choice) but the adapter never
+    ///      uses them. This narrow check prevents the adapter from being "enabled" when the
+    ///      user granted an unrelated permission bit only.
     function checkDelegation(
         address user
     ) external view returns (bool delegated) {
@@ -51,7 +76,8 @@ contract GearboxAdapter is IProtocolAdapter {
         if (creditAccount == address(0)) return false;
         (uint192 permissions, bool forbidden,) =
             BOT_LIST.getBotStatus(address(CREDIT_MANAGER), creditAccount, address(this));
-        return permissions > 0 && !forbidden;
+        if (forbidden) return false;
+        return (permissions & REQUIRED_PERMISSIONS) == REQUIRED_PERMISSIONS;
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -59,7 +85,7 @@ contract GearboxAdapter is IProtocolAdapter {
         address user,
         address debtAsset,
         uint256 amount
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         address creditAccount = CREDIT_MANAGER.creditAccounts(user);
         if (creditAccount == address(0)) revert SepehrErrors.ZeroAddress();
@@ -78,7 +104,7 @@ contract GearboxAdapter is IProtocolAdapter {
         address collateralAsset,
         uint256 amount,
         address recipient
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         address creditAccount = CREDIT_MANAGER.creditAccounts(user);

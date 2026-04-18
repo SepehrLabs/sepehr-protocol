@@ -10,20 +10,36 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 /// @title MorphoBlueAdapter
 /// @notice Protocol adapter for Morpho Blue isolated-market positions. Computes
 ///         health factor from position shares, market state, oracle price, and LLTV.
+/// @dev Trust boundary: Morpho's `setAuthorization` grants this adapter full manager
+///      rights over the user's position across every Morpho market (repay, withdraw,
+///      supplyCollateral, borrow). The surface is constrained to two operations because
+///      (a) `repay`/`withdrawCollateral` are the only functions gated by `onlyCore`, and
+///      (b) the adapter exposes no other public mutator. Any additional state-changing
+///      function added here MUST also be gated by `onlyCore` or explicitly scoped to a
+///      non-manager pathway; otherwise, manager rights become an unrestricted drain vector.
 contract MorphoBlueAdapter is IProtocolAdapter {
     using SafeERC20 for IERC20;
 
     IMorpho public immutable MORPHO;
     bytes32 public immutable MARKET_ID;
+    address public immutable core;
+
+    modifier onlyCore() {
+        if (msg.sender != core) revert SepehrErrors.NotAuthorized();
+        _;
+    }
 
     constructor(
         address morpho,
-        bytes32 marketId
+        bytes32 marketId,
+        address _core
     ) {
         if (morpho == address(0)) revert SepehrErrors.ZeroAddress();
         if (marketId == bytes32(0)) revert SepehrErrors.ZeroAddress();
+        if (_core == address(0)) revert SepehrErrors.ZeroAddress();
         MORPHO = IMorpho(morpho);
         MARKET_ID = marketId;
+        core = _core;
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -58,7 +74,7 @@ contract MorphoBlueAdapter is IProtocolAdapter {
         address user,
         address debtAsset,
         uint256 amount
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IMorpho.MarketParams memory params = MORPHO.idToMarketParams(MARKET_ID);
         IERC20(debtAsset).forceApprove(address(MORPHO), amount);
@@ -71,7 +87,7 @@ contract MorphoBlueAdapter is IProtocolAdapter {
         address,
         uint256 amount,
         address recipient
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         IMorpho.MarketParams memory params = MORPHO.idToMarketParams(MARKET_ID);

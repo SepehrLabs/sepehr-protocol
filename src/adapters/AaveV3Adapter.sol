@@ -15,15 +15,24 @@ contract AaveV3Adapter is IProtocolAdapter {
 
     IAavePool public immutable POOL;
     address public immutable ATOKEN;
+    address public immutable core;
+
+    modifier onlyCore() {
+        if (msg.sender != core) revert SepehrErrors.NotAuthorized();
+        _;
+    }
 
     constructor(
         address pool,
-        address aToken
+        address aToken,
+        address _core
     ) {
         if (pool == address(0)) revert SepehrErrors.ZeroAddress();
         if (aToken == address(0)) revert SepehrErrors.ZeroAddress();
+        if (_core == address(0)) revert SepehrErrors.ZeroAddress();
         POOL = IAavePool(pool);
         ATOKEN = aToken;
+        core = _core;
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -45,7 +54,7 @@ contract AaveV3Adapter is IProtocolAdapter {
         address user,
         address debtAsset,
         uint256 amount
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(POOL), amount);
         POOL.repay(debtAsset, amount, 2, user);
@@ -57,7 +66,7 @@ contract AaveV3Adapter is IProtocolAdapter {
         address collateralAsset,
         uint256 amount,
         address recipient
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         IERC20(ATOKEN).safeTransferFrom(user, address(this), amount);

@@ -46,7 +46,7 @@ contract MorphoBlueAdapterForkTest is ForkTestBase {
         forked = _tryCreateFork("RPC_ETHEREUM_PRIMARY_HTTP");
         if (!forked) return;
 
-        adapter = new MorphoBlueAdapter(MORPHO, MARKET_ID);
+        adapter = new MorphoBlueAdapter(MORPHO, MARKET_ID, address(this));
         user = makeAddr("morphoUser");
 
         // Fetch market params from the real Morpho contract

@@ -14,12 +14,21 @@ contract FluidAdapter is IProtocolAdapter {
     using SafeERC20 for IERC20;
 
     IFluidVault public immutable VAULT;
+    address public immutable core;
+
+    modifier onlyCore() {
+        if (msg.sender != core) revert SepehrErrors.NotAuthorized();
+        _;
+    }
 
     constructor(
-        address vault
+        address vault,
+        address _core
     ) {
         if (vault == address(0)) revert SepehrErrors.ZeroAddress();
+        if (_core == address(0)) revert SepehrErrors.ZeroAddress();
         VAULT = IFluidVault(vault);
+        core = _core;
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -41,7 +50,7 @@ contract FluidAdapter is IProtocolAdapter {
         address user,
         address debtAsset,
         uint256 amount
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         IERC20(debtAsset).forceApprove(address(VAULT), amount);
         VAULT.repay(user, amount);
@@ -53,7 +62,7 @@ contract FluidAdapter is IProtocolAdapter {
         address,
         uint256 amount,
         address recipient
-    ) external {
+    ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         // Adapter must be authorized via isAuth for the user's vault position.

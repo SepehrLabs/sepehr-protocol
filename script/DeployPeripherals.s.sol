@@ -91,16 +91,18 @@ contract DeployPeripherals is Script {
     }
 
     function _deployAdapters() internal {
+        address coreAddr = vm.envAddress("SEPEHR_CORE");
+
         address aavePool = vm.envOr("AAVE_POOL", address(0));
         address aToken = vm.envOr("AAVE_ATOKEN", address(0));
         if (aavePool != address(0) && aToken != address(0)) {
-            AaveV3Adapter aaveAdapter = new AaveV3Adapter(aavePool, aToken);
+            AaveV3Adapter aaveAdapter = new AaveV3Adapter(aavePool, aToken, coreAddr);
             console.log("AaveV3Adapter:", address(aaveAdapter));
         }
 
         address comet = vm.envOr("COMPOUND_V3_COMET", address(0));
         if (comet != address(0)) {
-            CompoundV3Adapter compAdapter = new CompoundV3Adapter(comet);
+            CompoundV3Adapter compAdapter = new CompoundV3Adapter(comet, coreAddr);
             console.log("CompoundV3Adapter:", address(compAdapter));
         }
     }

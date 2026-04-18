@@ -43,7 +43,7 @@ contract CompoundV2AdapterForkTest is ForkTestBase {
         forked = _tryCreateFork("RPC_ETHEREUM_PRIMARY_HTTP");
         if (!forked) return;
 
-        adapterCETH = new CompoundV2Adapter(COMPTROLLER, CETH);
+        adapterCETH = new CompoundV2Adapter(COMPTROLLER, CETH, address(this));
         user = makeAddr("compV2User");
 
         _createCompoundV2Position();
@@ -132,7 +132,7 @@ contract CompoundV2AdapterForkTest is ForkTestBase {
         if (!forked) return;
 
         // Create a separate adapter for cUSDC to call repayBorrowBehalf
-        CompoundV2Adapter adapterCUSDC = new CompoundV2Adapter(COMPTROLLER, CUSDC);
+        CompoundV2Adapter adapterCUSDC = new CompoundV2Adapter(COMPTROLLER, CUSDC, address(this));
 
         uint256 repayAmount = 500e6;
         deal(USDC, address(adapterCUSDC), repayAmount);

@@ -134,11 +134,14 @@ contract SepehrCoreTriggersTest is Test {
 
         assertEq(core.lastTriggerTime(alice), block.timestamp);
 
-        // Fee uses per-tier BPS (Shield = 20 bps)
+        // Fee uses per-tier BPS (Shield = 20 bps). Per-asset accounting separates the Shield
+        // monthly subscription ($9 USDC, 6 decimals) from the trigger fee in the debt asset.
         uint256 totalFee = Percentages.applyBps(REPAY_AMOUNT, SHIELD_FEE_BPS);
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(totalFee);
-        assertEq(core.ownerFeeBalance(), ownerShare);
-        assertEq(core.keeperFeeBalances(keeper), keeperShare);
+        uint256 shieldMonthly = 9_000_000;
+        assertEq(core.ownerFeeBalances(address(debtToken)), ownerShare);
+        assertEq(core.ownerFeeBalances(address(usdc)), shieldMonthly);
+        assertEq(core.keeperFeeBalances(keeper, address(debtToken)), keeperShare);
     }
 
     function test_execute_updatesSaveCredits() public {
@@ -351,11 +354,14 @@ contract SepehrCoreTriggersTest is Test {
             ""
         );
 
-        // Guardian fee = 10 bps
+        // Guardian fee = 10 bps. Per-asset accounting: USDC holds subscription revenue
+        // (Shield $9 from setUp + Guardian $49 here); debt asset holds the trigger fee.
         uint256 totalFee = Percentages.applyBps(REPAY_AMOUNT, 10);
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(totalFee);
-        assertEq(core.ownerFeeBalance(), ownerShare);
-        assertEq(core.keeperFeeBalances(keeper), keeperShare);
+        uint256 subscriptionRevenue = 9_000_000 + 49_000_000;
+        assertEq(core.ownerFeeBalances(address(debtToken)), ownerShare);
+        assertEq(core.ownerFeeBalances(address(usdc)), subscriptionRevenue);
+        assertEq(core.keeperFeeBalances(keeper, address(debtToken)), keeperShare);
     }
 
     // ─── Reverts ────────────────────────────────────────────────

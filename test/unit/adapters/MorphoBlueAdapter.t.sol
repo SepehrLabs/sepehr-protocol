@@ -18,6 +18,7 @@ contract MorphoBlueAdapterTest is Test {
     address user = makeAddr("user");
     address recipient = makeAddr("recipient");
     address irm = makeAddr("irm");
+    address internal core = makeAddr("core");
 
     function setUp() public {
         morpho = new MockMorpho();
@@ -34,7 +35,7 @@ contract MorphoBlueAdapterTest is Test {
             0.8e18 // 80% LLTV
         );
 
-        adapter = new MorphoBlueAdapter(address(morpho), MARKET_ID);
+        adapter = new MorphoBlueAdapter(address(morpho), MARKET_ID, core);
     }
 
     // ── Constructor ──────────────────────────────────────────────────────
@@ -42,16 +43,22 @@ contract MorphoBlueAdapterTest is Test {
     function test_constructor_setsMorphoAndMarketId() public view {
         assertEq(address(adapter.MORPHO()), address(morpho));
         assertEq(adapter.MARKET_ID(), MARKET_ID);
+        assertEq(adapter.core(), core);
     }
 
     function test_constructor_revertsOnZeroMorpho() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new MorphoBlueAdapter(address(0), MARKET_ID);
+        new MorphoBlueAdapter(address(0), MARKET_ID, core);
     }
 
     function test_constructor_revertsOnZeroMarketId() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new MorphoBlueAdapter(address(morpho), bytes32(0));
+        new MorphoBlueAdapter(address(morpho), bytes32(0), core);
+    }
+
+    function test_constructor_revertsOnZeroCore() public {
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        new MorphoBlueAdapter(address(morpho), MARKET_ID, address(0));
     }
 
     // ── getHealthFactor ──────────────────────────────────────────────────
@@ -129,7 +136,13 @@ contract MorphoBlueAdapterTest is Test {
 
     // ── repay ────────────────────────────────────────────────────────────
 
+    function test_repay_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.repay(user, address(loanToken), 1e18);
+    }
+
     function test_repay_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.repay(user, address(loanToken), 0);
     }
@@ -138,6 +151,7 @@ contract MorphoBlueAdapterTest is Test {
         uint256 amount = 500e18;
         loanToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(loanToken), amount);
 
         assertEq(morpho.lastRepayLoanToken(), address(loanToken));
@@ -151,6 +165,7 @@ contract MorphoBlueAdapterTest is Test {
         uint256 amount = 500e18;
         loanToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(loanToken), amount);
 
         assertEq(loanToken.balanceOf(address(morpho)), amount);
@@ -159,12 +174,19 @@ contract MorphoBlueAdapterTest is Test {
 
     // ── withdrawCollateral ───────────────────────────────────────────────
 
+    function test_withdrawCollateral_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.withdrawCollateral(user, address(collateralToken), 1e18, recipient);
+    }
+
     function test_withdrawCollateral_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 0, recipient);
     }
 
     function test_withdrawCollateral_revertsOnZeroRecipient() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 1e18, address(0));
     }
@@ -172,6 +194,7 @@ contract MorphoBlueAdapterTest is Test {
     function test_withdrawCollateral_callsMorphoCorrectly() public {
         uint256 amount = 2e18;
 
+        vm.prank(core);
         adapter.withdrawCollateral(user, address(collateralToken), amount, recipient);
 
         assertEq(morpho.lastWithdrawCollateralToken(), address(collateralToken));
@@ -222,6 +245,7 @@ contract MorphoBlueAdapterTest is Test {
         vm.assume(amount > 0);
         loanToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(loanToken), amount);
 
         assertEq(morpho.lastRepayAssets(), amount);
@@ -247,6 +271,7 @@ contract MorphoBlueAdapterTest is Test {
         vm.assume(amount > 0);
         vm.assume(rcpt != address(0));
 
+        vm.prank(core);
         adapter.withdrawCollateral(user, address(collateralToken), amount, rcpt);
 
         assertEq(morpho.lastWithdrawAssets(), amount);

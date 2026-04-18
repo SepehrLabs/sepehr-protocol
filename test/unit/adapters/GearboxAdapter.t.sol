@@ -20,6 +20,7 @@ contract GearboxAdapterTest is Test {
     address internal user = makeAddr("user");
     address internal recipient = makeAddr("recipient");
     address internal creditAccount = makeAddr("creditAccount");
+    address internal core = makeAddr("core");
 
     function setUp() public {
         debtToken = new MockERC20("Debt Token", "DEBT");
@@ -28,24 +29,30 @@ contract GearboxAdapterTest is Test {
         creditManager = new MockCreditManager(address(facade));
         botList = new MockBotList();
 
-        adapter = new GearboxAdapter(address(creditManager), address(botList));
+        adapter = new GearboxAdapter(address(creditManager), address(botList), core);
     }
 
     // ─── Constructor ───────────────────────────────────────────────────
 
     function test_constructor_revertsOnZeroCreditManager() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new GearboxAdapter(address(0), address(botList));
+        new GearboxAdapter(address(0), address(botList), core);
     }
 
     function test_constructor_revertsOnZeroBotList() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new GearboxAdapter(address(creditManager), address(0));
+        new GearboxAdapter(address(creditManager), address(0), core);
+    }
+
+    function test_constructor_revertsOnZeroCore() public {
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        new GearboxAdapter(address(creditManager), address(botList), address(0));
     }
 
     function test_constructor_storesImmutables() public view {
         assertEq(address(adapter.CREDIT_MANAGER()), address(creditManager));
         assertEq(address(adapter.BOT_LIST()), address(botList));
+        assertEq(adapter.core(), core);
     }
 
     // ─── getHealthFactor ───────────────────────────────────────────────
@@ -100,16 +107,37 @@ contract GearboxAdapterTest is Test {
         assertFalse(adapter.checkDelegation(user));
     }
 
-    function test_checkDelegation_returnsTrueWhenPermissionsAndNotForbidden() public {
+    function test_checkDelegation_returnsTrueWhenRequiredPermissionsAndNotForbidden() public {
         creditManager.setCreditAccount(user, creditAccount);
-        botList.setBotStatus(address(creditManager), creditAccount, address(adapter), 1, false, false);
+        // Grant DECREASE_DEBT (bit 2) | WITHDRAW_COLLATERAL (bit 5) = 4 | 32 = 36.
+        uint192 required = (1 << 2) | (1 << 5);
+        botList.setBotStatus(address(creditManager), creditAccount, address(adapter), required, false, false);
 
         assertTrue(adapter.checkDelegation(user));
     }
 
+    function test_checkDelegation_returnsFalseWhenMissingDebtPermission() public {
+        creditManager.setCreditAccount(user, creditAccount);
+        // Only WITHDRAW_COLLATERAL — missing DECREASE_DEBT. Must reject.
+        uint192 onlyWithdraw = (1 << 5);
+        botList.setBotStatus(address(creditManager), creditAccount, address(adapter), onlyWithdraw, false, false);
+
+        assertFalse(adapter.checkDelegation(user));
+    }
+
+    function test_checkDelegation_returnsFalseWhenMissingWithdrawPermission() public {
+        creditManager.setCreditAccount(user, creditAccount);
+        // Only DECREASE_DEBT — missing WITHDRAW_COLLATERAL. Must reject.
+        uint192 onlyDebt = (1 << 2);
+        botList.setBotStatus(address(creditManager), creditAccount, address(adapter), onlyDebt, false, false);
+
+        assertFalse(adapter.checkDelegation(user));
+    }
+
     function test_checkDelegation_returnsFalseWhenForbidden() public {
         creditManager.setCreditAccount(user, creditAccount);
-        botList.setBotStatus(address(creditManager), creditAccount, address(adapter), 1, true, false);
+        uint192 required = (1 << 2) | (1 << 5);
+        botList.setBotStatus(address(creditManager), creditAccount, address(adapter), required, true, false);
 
         assertFalse(adapter.checkDelegation(user));
     }
@@ -130,12 +158,19 @@ contract GearboxAdapterTest is Test {
 
     // ─── repay ─────────────────────────────────────────────────────────
 
+    function test_repay_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.repay(user, address(debtToken), 1e18);
+    }
+
     function test_repay_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.repay(user, address(debtToken), 0);
     }
 
     function test_repay_revertsWhenNoCreditAccount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.repay(user, address(debtToken), 100e18);
     }
@@ -145,6 +180,7 @@ contract GearboxAdapterTest is Test {
         creditManager.setCreditAccount(user, creditAccount);
         debtToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(debtToken), amount);
 
         // Tokens transferred to creditAccount
@@ -164,17 +200,25 @@ contract GearboxAdapterTest is Test {
 
     // ─── withdrawCollateral ────────────────────────────────────────────
 
+    function test_withdrawCollateral_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.withdrawCollateral(user, address(collateralToken), 1e18, recipient);
+    }
+
     function test_withdrawCollateral_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 0, recipient);
     }
 
     function test_withdrawCollateral_revertsOnZeroRecipient() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 1e18, address(0));
     }
 
     function test_withdrawCollateral_revertsWhenNoCreditAccount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 1e18, recipient);
     }
@@ -183,6 +227,7 @@ contract GearboxAdapterTest is Test {
         uint256 amount = 50e18;
         creditManager.setCreditAccount(user, creditAccount);
 
+        vm.prank(core);
         adapter.withdrawCollateral(user, address(collateralToken), amount, recipient);
 
         assertEq(facade.botMulticallCount(), 1);
@@ -251,6 +296,7 @@ contract GearboxAdapterTest is Test {
         creditManager.setCreditAccount(user, creditAccount);
         debtToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(debtToken), amount);
 
         assertEq(debtToken.balanceOf(creditAccount), amount);

@@ -15,24 +15,31 @@ contract FluidAdapterTest is Test {
 
     address internal user = makeAddr("user");
     address internal recipient = makeAddr("recipient");
+    address internal core = makeAddr("core");
 
     function setUp() public {
         debtToken = new MockERC20("Debt Token", "DEBT");
         collateralToken = new MockERC20("Collateral", "COL");
 
         vault = new MockFluidVault(address(debtToken));
-        adapter = new FluidAdapter(address(vault));
+        adapter = new FluidAdapter(address(vault), core);
     }
 
     // ─── Constructor ───────────────────────────────────────────────────
 
     function test_constructor_revertsOnZeroVault() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new FluidAdapter(address(0));
+        new FluidAdapter(address(0), core);
+    }
+
+    function test_constructor_revertsOnZeroCore() public {
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        new FluidAdapter(address(vault), address(0));
     }
 
     function test_constructor_storesImmutable() public view {
         assertEq(address(adapter.VAULT()), address(vault));
+        assertEq(adapter.core(), core);
     }
 
     // ─── getHealthFactor ───────────────────────────────────────────────
@@ -82,7 +89,13 @@ contract FluidAdapterTest is Test {
 
     // ─── repay ─────────────────────────────────────────────────────────
 
+    function test_repay_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.repay(user, address(debtToken), 1e18);
+    }
+
     function test_repay_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.repay(user, address(debtToken), 0);
     }
@@ -91,6 +104,7 @@ contract FluidAdapterTest is Test {
         uint256 amount = 100e18;
         debtToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(debtToken), amount);
 
         assertEq(vault.repayCallCount(), 1);
@@ -103,6 +117,7 @@ contract FluidAdapterTest is Test {
         uint256 amount = 75e18;
         debtToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(debtToken), amount);
 
         assertEq(debtToken.balanceOf(address(vault)), amount);
@@ -111,12 +126,19 @@ contract FluidAdapterTest is Test {
 
     // ─── withdrawCollateral ────────────────────────────────────────────
 
+    function test_withdrawCollateral_revertsWhenNotCore() public {
+        vm.expectRevert(SepehrErrors.NotAuthorized.selector);
+        adapter.withdrawCollateral(user, address(collateralToken), 1e18, recipient);
+    }
+
     function test_withdrawCollateral_revertsOnZeroAmount() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 0, recipient);
     }
 
     function test_withdrawCollateral_revertsOnZeroRecipient() public {
+        vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 1e18, address(0));
     }
@@ -130,6 +152,7 @@ contract FluidAdapterTest is Test {
         // but the vault's withdraw sends UNDERLYING (debtToken) — for this test, fund with debtToken
         debtToken.mint(address(vault), amount);
 
+        vm.prank(core);
         adapter.withdrawCollateral(user, address(collateralToken), amount, recipient);
 
         assertEq(vault.withdrawCallCount(), 1);
@@ -178,6 +201,7 @@ contract FluidAdapterTest is Test {
         amount = bound(amount, 1, type(uint128).max);
         debtToken.mint(address(adapter), amount);
 
+        vm.prank(core);
         adapter.repay(user, address(debtToken), amount);
 
         assertEq(vault.repayCallCount(), 1);

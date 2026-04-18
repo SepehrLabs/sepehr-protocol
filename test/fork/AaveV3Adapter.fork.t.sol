@@ -50,7 +50,7 @@ contract AaveV3AdapterForkTest is ForkTestBase {
         forked = _tryCreateFork("RPC_ETHEREUM_PRIMARY_HTTP");
         if (!forked) return;
 
-        adapter = new AaveV3Adapter(AAVE_V3_POOL, AWETH);
+        adapter = new AaveV3Adapter(AAVE_V3_POOL, AWETH, address(this));
         user = makeAddr("forkUser");
 
         _createAavePosition();
