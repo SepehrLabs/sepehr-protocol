@@ -19,6 +19,9 @@ library SepehrEvents {
         uint256 repayPercentBps
     );
     event ProtectionDisabled(address indexed user, bytes32 indexed protocolKey);
+    /// @notice A18: emitted when `unsubscribe` iterates and wipes the user's `_protections`
+    /// entries. `count` is the number of protocol keys cleared in this call.
+    event UserProtectionsCleared(address indexed user, uint256 count);
     event ProtectionUpdated(
         address indexed user,
         bytes32 indexed protocolKey,

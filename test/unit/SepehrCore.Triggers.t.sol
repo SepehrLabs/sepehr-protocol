@@ -16,15 +16,9 @@ import {MockFlashLoan} from "../../src/mocks/MockFlashLoan.sol";
 import {MockChainlinkAggregator} from "../helpers/MockChainlinkAggregator.sol";
 
 contract MockERC20 is ERC20 {
-    constructor(
-        string memory name_,
-        string memory symbol_
-    ) ERC20(name_, symbol_) {}
+    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
 
-    function mint(
-        address to,
-        uint256 amount
-    ) external {
+    function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
 }
@@ -103,6 +97,16 @@ contract SepehrCoreTriggersTest is Test {
         return providers;
     }
 
+    /// @dev A15: register an 8-decimal, $1.00 debt-asset oracle so
+    /// `_computeRepayValueUsd6(debtAsset, REPAY_AMOUNT)` returns REPAY_VALUE_USD6 (1000e6).
+    /// Used only by the save-credit tests; other tests exercise the
+    /// zero-oracle path where `saveCredits` is not accrued.
+    function _registerDebtOracleAtOneDollar() internal {
+        MockChainlinkAggregator agg = new MockChainlinkAggregator(8, 1e8);
+        vm.prank(timelock);
+        core.setAssetOracle(address(debtToken), address(agg), 1 days);
+    }
+
     // ─── A7: minCollateralUsd gate in enableProtection ─────────────
 
     /// @dev A7: once the timelock sets `minCollateralUsd > 0`, `enableProtection` must
@@ -164,19 +168,9 @@ contract SepehrCoreTriggersTest is Test {
         address[] memory providers = _buildFlashProviders();
 
         vm.prank(keeper);
-        core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
 
-        assertEq(core.lastTriggerTime(alice), block.timestamp);
+        assertEq(core.lastTriggerTime(alice, seqKey), block.timestamp);
 
         // Fee uses per-tier BPS (Shield = 20 bps). Per-asset accounting separates the Shield
         // monthly subscription ($9 USDC, 6 decimals) from the trigger fee in the debt asset.
@@ -200,20 +194,13 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(alice);
         core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
+        // A15: save-credit USD value is now computed from the registered debt-asset oracle.
+        // At $1.00 (1e8) × 1000e18 repay / 1e18 decimals / 100 (oracle→USD6 scaling) = 1000e6.
+        _registerDebtOracleAtOneDollar();
         address[] memory providers = _buildFlashProviders();
 
         vm.prank(keeper);
-        core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
 
         assertEq(core.getSaveCredits(alice), REPAY_VALUE_USD6);
     }
@@ -230,21 +217,12 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(alice);
         core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
+        _registerDebtOracleAtOneDollar();
         address[] memory providers = _buildFlashProviders();
 
         // First execution
         vm.prank(keeper);
-        core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
 
         // Warp past cooldown, reset adapter
         vm.warp(block.timestamp + 3601);
@@ -253,19 +231,34 @@ contract SepehrCoreTriggersTest is Test {
 
         // Second execution
         vm.prank(keeper);
-        core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
 
         assertEq(core.getSaveCredits(alice), REPAY_VALUE_USD6 * 2);
+    }
+
+    /// @dev A15: when the debt-asset oracle is absent, save credits are NOT accrued. The
+    /// trigger still succeeds (oracle coverage is rolled out per-asset), but the user-facing
+    /// metric only grows when it can be verified on-chain. Keepers cannot inflate the metric
+    /// by supplying their own USD number — that parameter no longer exists in the signature.
+    function test_execute_accruesZeroSaveCreditWhenDebtOracleMissing() public {
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(alice, true);
+        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
+
+        bytes32 seqKey = keccak256("NO_ORACLE_SAVE_CREDIT");
+        vm.prank(timelock);
+        core.addAdapter(seqKey, address(seqAdapter));
+
+        vm.prank(alice);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
+
+        address[] memory providers = _buildFlashProviders();
+
+        uint256 before = core.getSaveCredits(alice);
+        vm.prank(keeper);
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+
+        assertEq(core.getSaveCredits(alice), before, "save credits must not accrue without oracle");
     }
 
     function test_execute_emitsSaveCreditEvent() public {
@@ -280,23 +273,14 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(alice);
         core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
+        _registerDebtOracleAtOneDollar();
         address[] memory providers = _buildFlashProviders();
 
         vm.expectEmit(true, false, false, true, address(core));
         emit SepehrEvents.SaveCreditAccrued(alice, REPAY_VALUE_USD6, REPAY_VALUE_USD6);
 
         vm.prank(keeper);
-        core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
     }
 
     function test_execute_emitsTriggeredEvent() public {
@@ -316,17 +300,7 @@ contract SepehrCoreTriggersTest is Test {
         emit SepehrEvents.Triggered(alice, seqKey, keeper, REPAY_AMOUNT, 0, HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD, 0);
 
         vm.prank(keeper);
-        core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
     }
 
     function test_execute_emitsFeeCollectedEvent() public {
@@ -349,17 +323,7 @@ contract SepehrCoreTriggersTest is Test {
         emit SepehrEvents.FeeCollected(keeper, totalFee, ownerShare, keeperShare);
 
         vm.prank(keeper);
-        core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
     }
 
     // ─── Per-tier fee validation ────────────────────────────────
@@ -386,17 +350,7 @@ contract SepehrCoreTriggersTest is Test {
         address[] memory providers = _buildFlashProviders();
 
         vm.prank(keeper);
-        core.execute(
-            bob,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
+        core.execute(bob, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
 
         // Guardian fee = 10 bps. Per-asset accounting: USDC holds subscription revenue
         // (Shield $9 from setUp + Guardian $49 here); debt asset holds the trigger fee.
@@ -417,15 +371,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(SepehrErrors.NotKeeper.selector);
         vm.prank(notKeeper);
         core.execute(
-            alice,
-            PROTOCOL_KEY,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
@@ -436,15 +382,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(SepehrErrors.ContractPaused.selector);
         vm.prank(keeper);
         core.execute(
-            alice,
-            PROTOCOL_KEY,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
@@ -457,15 +395,7 @@ contract SepehrCoreTriggersTest is Test {
         );
         vm.prank(keeper);
         core.execute(
-            alice,
-            PROTOCOL_KEY,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
@@ -483,34 +413,14 @@ contract SepehrCoreTriggersTest is Test {
         address[] memory providers = _buildFlashProviders();
 
         vm.prank(keeper);
-        core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
 
         seqAdapter.reset(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
 
         uint256 remaining = 3600;
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.CooldownActive.selector, remaining));
         vm.prank(keeper);
-        core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
     }
 
     function test_execute_succeedsAfterCooldown() public {
@@ -528,34 +438,14 @@ contract SepehrCoreTriggersTest is Test {
 
         debtToken.mint(address(flashLoan), REPAY_AMOUNT * 10);
         vm.prank(keeper);
-        core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
 
         vm.warp(block.timestamp + 3601);
         seqAdapter.reset(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
         debtToken.mint(address(flashLoan), REPAY_AMOUNT * 10);
 
         vm.prank(keeper);
-        core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
     }
 
     function test_execute_revertsWhenSubscriptionExpired() public {
@@ -566,15 +456,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(SepehrErrors.SubscriptionExpired.selector);
         vm.prank(keeper);
         core.execute(
-            alice,
-            PROTOCOL_KEY,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
@@ -589,15 +471,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.ProtectionNotEnabled.selector, alice, unknownKey));
         vm.prank(keeper);
         core.execute(
-            alice,
-            unknownKey,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, unknownKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
@@ -609,15 +483,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.DelegationRevoked.selector, alice, PROTOCOL_KEY));
         vm.prank(keeper);
         core.execute(
-            alice,
-            PROTOCOL_KEY,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
@@ -634,7 +500,6 @@ contract SepehrCoreTriggersTest is Test {
             address(debtToken),
             address(collateralToken),
             REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
             emptyProviders,
             address(dex),
             ""
@@ -651,15 +516,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         vm.prank(keeper);
         core.execute(
-            alice,
-            PROTOCOL_KEY,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
@@ -680,15 +537,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         vm.prank(keeper);
         core.execute(
-            alice,
-            PROTOCOL_KEY,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
@@ -698,9 +547,7 @@ contract SepehrCoreTriggersTest is Test {
 
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         vm.prank(keeper);
-        core.execute(
-            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), 0, 0, providers, address(dex), ""
-        );
+        core.execute(alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), 0, providers, address(dex), "");
     }
 
     function test_execute_revertsOnUnauthorizedDexRouter() public {
@@ -711,15 +558,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(SepehrErrors.NotAuthorized.selector);
         vm.prank(keeper);
         core.execute(
-            alice,
-            PROTOCOL_KEY,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            fakeDex,
-            ""
+            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, fakeDex, ""
         );
     }
 
@@ -730,15 +569,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.expectRevert(SepehrErrors.SubscriptionNotFound.selector);
         vm.prank(keeper);
         core.execute(
-            bob,
-            PROTOCOL_KEY,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            bob, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
@@ -775,7 +606,6 @@ contract SepehrCoreTriggersTest is Test {
             address(debtToken),
             address(collateralToken),
             REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
             providers,
             address(dex),
             keeperSupplied
@@ -811,15 +641,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(keeper);
         vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
 
         // Once a canonical route is registered, the same call succeeds.
@@ -829,15 +651,7 @@ contract SepehrCoreTriggersTest is Test {
 
         vm.prank(keeper);
         core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
         assertEq(dex.lastRouteData(), canonical);
     }
@@ -864,15 +678,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(keeper);
         vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
@@ -894,17 +700,9 @@ contract SepehrCoreTriggersTest is Test {
         address[] memory providers = _buildFlashProviders();
         vm.prank(keeper);
         core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
-        assertEq(core.lastTriggerTime(alice), block.timestamp);
+        assertEq(core.lastTriggerTime(alice, seqKey), block.timestamp);
     }
 
     /// @dev Non-strict mode with oracles only partially registered must skip the floor
@@ -922,17 +720,9 @@ contract SepehrCoreTriggersTest is Test {
         address[] memory providers = _buildFlashProviders();
         vm.prank(keeper);
         core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
-        assertEq(core.lastTriggerTime(alice), block.timestamp);
+        assertEq(core.lastTriggerTime(alice, seqKey), block.timestamp);
     }
 
     /// @dev Strict oracle pricing: a missing oracle for either side must block the
@@ -949,15 +739,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(keeper);
         vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
@@ -980,18 +762,8 @@ contract SepehrCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
         vm.prank(keeper);
-        core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(debtToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
-        );
-        assertEq(core.lastTriggerTime(alice), block.timestamp);
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+        assertEq(core.lastTriggerTime(alice, seqKey), block.timestamp);
     }
 
     /// @dev A stale oracle reading (updatedAt older than the configured staleness)
@@ -1017,15 +789,7 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(keeper);
         vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
@@ -1047,24 +811,14 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(keeper);
         vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         core.execute(
-            alice,
-            seqKey,
-            address(debtToken),
-            address(collateralToken),
-            REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
-            providers,
-            address(dex),
-            ""
+            alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
     /// @dev Internal helper — wires a fresh SequentialMockAdapter under `seqKey`,
     /// enables alice's protection against it, and funds the DEX + adapter so a
     /// collateral→debt swap is possible. Keeps each D2 test self-contained.
-    function _setupForSwap(
-        bytes32 seqKey
-    ) internal {
+    function _setupForSwap(bytes32 seqKey) internal {
         SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
         seqAdapter.setDelegation(alice, true);
 
@@ -1105,13 +859,169 @@ contract SepehrCoreTriggersTest is Test {
             address(debtToken),
             address(debtToken), // same asset — no swap, registry not consulted
             REPAY_AMOUNT,
-            REPAY_VALUE_USD6,
             providers,
             address(dex),
             ""
         );
 
-        assertEq(core.lastTriggerTime(alice), block.timestamp);
+        assertEq(core.lastTriggerTime(alice, seqKey), block.timestamp);
+    }
+
+    /// @dev A16: cooldown is keyed by `(user, protocolKey)`. A trigger on one protocol must
+    /// NOT lock out a concurrent trigger on another protocol for the same user — otherwise an
+    /// adversary could freeze protection on the critical position by triggering a low-stakes
+    /// one first.
+    function test_execute_cooldownIsPerProtocol() public {
+        // Two adapters, same user, both below threshold.
+        SequentialMockAdapter adapterA = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        adapterA.setDelegation(alice, true);
+        debtToken.mint(address(adapterA), REPAY_AMOUNT * 10);
+        bytes32 keyA = keccak256("COOLDOWN_INDEPENDENT_A");
+        vm.prank(timelock);
+        core.addAdapter(keyA, address(adapterA));
+
+        SequentialMockAdapter adapterB = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        adapterB.setDelegation(alice, true);
+        debtToken.mint(address(adapterB), REPAY_AMOUNT * 10);
+        bytes32 keyB = keccak256("COOLDOWN_INDEPENDENT_B");
+        vm.prank(timelock);
+        core.addAdapter(keyB, address(adapterB));
+
+        vm.startPrank(alice);
+        core.enableProtection(keyA, THRESHOLD_HF, 250, 2500);
+        core.enableProtection(keyB, THRESHOLD_HF, 250, 2500);
+        vm.stopPrank();
+
+        address[] memory providers = _buildFlashProviders();
+
+        // Fire on protocol A.
+        vm.prank(keeper);
+        core.execute(alice, keyA, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+        uint256 tA = core.lastTriggerTime(alice, keyA);
+        assertEq(tA, block.timestamp, "A cooldown registered");
+        assertEq(core.lastTriggerTime(alice, keyB), 0, "B cooldown untouched");
+
+        // Pre-A16 this would revert with CooldownActive; now it must succeed.
+        vm.prank(keeper);
+        core.execute(alice, keyB, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+        assertEq(core.lastTriggerTime(alice, keyB), block.timestamp, "B cooldown independent");
+        assertEq(core.lastTriggerTime(alice, keyA), tA, "A cooldown unchanged by B trigger");
+    }
+
+    // ─── A18: unsubscribe clears protections ──────────────────────
+
+    /// @dev A18: `unsubscribe` must iterate `_userProtocols[msg.sender]` and wipe each
+    /// `_protections[user][key]`, so a later re-subscribe starts from a clean slate instead
+    /// of silently re-activating stale threshold/slippage params.
+    function test_unsubscribe_clearsProtectionState() public {
+        // Setup: register a second protocol, enable protection on both.
+        bytes32 keyB = keccak256("SECOND_PROTOCOL");
+        MockAdapter adapterB = new MockAdapter();
+        adapterB.setDelegation(alice, true);
+        vm.prank(timelock);
+        core.addAdapter(keyB, address(adapterB));
+
+        vm.prank(alice);
+        core.enableProtection(keyB, THRESHOLD_HF, 200, 3000);
+
+        // Sanity: both keys enabled.
+        ISepehrCore.PositionProtection memory pA = core.getProtection(alice, PROTOCOL_KEY);
+        ISepehrCore.PositionProtection memory pB = core.getProtection(alice, keyB);
+        assertTrue(pA.enabled);
+        assertTrue(pB.enabled);
+
+        bytes32[] memory before = core.getUserProtocols(alice);
+        assertEq(before.length, 2);
+
+        // Need USDC balance for the refund path. Mint and warp mid-period so refund is non-zero
+        // but bounded by ownerFeeBalances[usdc] (which holds alice's $9 setUp subscription).
+        vm.warp(block.timestamp + 10 days);
+
+        vm.prank(alice);
+        core.unsubscribe();
+
+        // A18: protections are wiped.
+        pA = core.getProtection(alice, PROTOCOL_KEY);
+        pB = core.getProtection(alice, keyB);
+        assertFalse(pA.enabled, "protection A not cleared");
+        assertFalse(pB.enabled, "protection B not cleared");
+        assertEq(pA.thresholdHF, 0);
+        assertEq(pB.thresholdHF, 0);
+
+        bytes32[] memory after_ = core.getUserProtocols(alice);
+        assertEq(after_.length, 0, "user protocols list not cleared");
+    }
+
+    /// @dev A18: emits `UserProtectionsCleared(user, count)` with the correct count.
+    function test_unsubscribe_emitsUserProtectionsCleared() public {
+        bytes32[] memory prior = core.getUserProtocols(alice);
+        assertEq(prior.length, 1, "setUp enabled exactly one protection for alice");
+
+        vm.expectEmit(true, false, false, true, address(core));
+        emit SepehrEvents.UserProtectionsCleared(alice, 1);
+
+        vm.prank(alice);
+        core.unsubscribe();
+    }
+
+    /// @dev A18: getUserProtocols reflects enable/disable flow.
+    function test_getUserProtocols_tracksEnableDisable() public {
+        // setUp already enabled PROTOCOL_KEY → 1 entry.
+        bytes32[] memory list = core.getUserProtocols(alice);
+        assertEq(list.length, 1);
+        assertEq(list[0], PROTOCOL_KEY);
+
+        // Enable a second protocol.
+        bytes32 keyB = keccak256("UP_KEY_B");
+        MockAdapter adapterB = new MockAdapter();
+        adapterB.setDelegation(alice, true);
+        vm.prank(timelock);
+        core.addAdapter(keyB, address(adapterB));
+        vm.prank(alice);
+        core.enableProtection(keyB, THRESHOLD_HF, 200, 2500);
+
+        list = core.getUserProtocols(alice);
+        assertEq(list.length, 2);
+
+        // Disable the first: swap-pop leaves keyB in slot 0.
+        vm.prank(alice);
+        core.disableProtection(PROTOCOL_KEY);
+        list = core.getUserProtocols(alice);
+        assertEq(list.length, 1);
+        assertEq(list[0], keyB);
+
+        // Disable the last.
+        vm.prank(alice);
+        core.disableProtection(keyB);
+        list = core.getUserProtocols(alice);
+        assertEq(list.length, 0);
+    }
+
+    /// @dev A16: the same-protocol cooldown still gates re-entry. Once A16 keys cooldown by
+    /// protocolKey, firing twice on the same key within COOLDOWN_SECONDS must still revert.
+    function test_execute_sameProtocolCooldownStillEnforced() public {
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(alice, true);
+        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
+        bytes32 seqKey = keccak256("SAME_KEY_COOLDOWN");
+        vm.prank(timelock);
+        core.addAdapter(seqKey, address(seqAdapter));
+
+        vm.prank(alice);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
+
+        address[] memory providers = _buildFlashProviders();
+
+        vm.prank(keeper);
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
+
+        // Reset adapter HF back below threshold for the retry.
+        seqAdapter.reset(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        debtToken.mint(address(flashLoan), REPAY_AMOUNT * 2);
+
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.CooldownActive.selector, 3600));
+        vm.prank(keeper);
+        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
     }
 }
 
@@ -1121,69 +1031,42 @@ contract SequentialMockAdapter {
     uint256 public currentHF;
     uint256 public postRepayHF;
 
-    constructor(
-        uint256 _initialHF,
-        uint256 _postRepayHF
-    ) {
+    constructor(uint256 _initialHF, uint256 _postRepayHF) {
         currentHF = _initialHF;
         postRepayHF = _postRepayHF;
     }
 
-    function reset(
-        uint256 _initialHF,
-        uint256 _postRepayHF
-    ) external {
+    function reset(uint256 _initialHF, uint256 _postRepayHF) external {
         currentHF = _initialHF;
         postRepayHF = _postRepayHF;
     }
 
-    function setDelegation(
-        address user,
-        bool delegated
-    ) external {
+    function setDelegation(address user, bool delegated) external {
         delegations[user] = delegated;
     }
 
-    function getHealthFactor(
-        address
-    ) external view returns (uint256) {
+    function getHealthFactor(address) external view returns (uint256) {
         return currentHF;
     }
 
-    function checkDelegation(
-        address user
-    ) external view returns (bool) {
+    function checkDelegation(address user) external view returns (bool) {
         return delegations[user];
     }
 
-    function repay(
-        address,
-        address debtAsset,
-        uint256 amount
-    ) external {
+    function repay(address, address debtAsset, uint256 amount) external {
         ERC20(debtAsset).transfer(address(0xdead), amount);
         currentHF = postRepayHF;
     }
 
-    function withdrawCollateral(
-        address,
-        address collateralAsset,
-        uint256 amount,
-        address recipient
-    ) external {
+    function withdrawCollateral(address, address collateralAsset, uint256 amount, address recipient) external {
         ERC20(collateralAsset).transfer(recipient, amount);
     }
 
-    function getCollateralValueUsd(
-        address
-    ) external pure returns (uint256) {
+    function getCollateralValueUsd(address) external pure returns (uint256) {
         return 10_000e8; // $10k — below Shield tier cap ($15k) so execute() passes H01 check
     }
 
-    function getDebt(
-        address,
-        address
-    ) external pure returns (uint256) {
+    function getDebt(address, address) external pure returns (uint256) {
         return 0;
     }
 }
