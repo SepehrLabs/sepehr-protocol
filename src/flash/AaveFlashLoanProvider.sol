@@ -45,6 +45,12 @@ contract AaveFlashLoanProvider is IFlashLoanProvider, ReentrancyGuard {
 
         POOL.flashLoanSimple(address(this), asset, amount, "", 0);
 
+        // C8: explicitly zero the Pool's allowance after repayment. On standard ERC20s Aave's
+        // `transferFrom` already decrements allowance to 0, but non-standard tokens (USDT-like
+        // quirks, custom ERC20s) may leave dust, which would persist across flash loans and
+        // silently raise the next call's effective allowance.
+        IERC20(asset).forceApprove(address(POOL), 0);
+
         _activeCallback = address(0);
         delete _activeData;
     }

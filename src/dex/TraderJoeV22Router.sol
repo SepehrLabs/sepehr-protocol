@@ -44,6 +44,9 @@ contract TraderJoeV22Router is IDexRouter, ReentrancyGuard {
         bytes calldata routeData
     ) external override nonReentrant returns (uint256 amountOut) {
         if (amountIn == 0) revert SepehrErrors.ZeroAmount();
+        // D12: TraderJoe's LBRouter would revert inside route resolution with an opaque
+        // error on a self-swap; short-circuit with a typed signal.
+        if (tokenIn == tokenOut) revert SepehrErrors.SameToken();
 
         (uint256 deadline, uint256 binStep, ILBRouter.Version version) = _decodeRoute(routeData);
 

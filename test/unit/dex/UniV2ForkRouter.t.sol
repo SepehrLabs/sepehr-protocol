@@ -49,6 +49,12 @@ contract UniV2ForkRouterTest is Test {
         router.swap(address(tokenIn), address(tokenOut), 0, 0, "");
     }
 
+    function test_swap_revertsOnSameToken() public {
+        // Audit D12: self-swap short-circuits to SameToken before touching the external router.
+        vm.expectRevert(SepehrErrors.SameToken.selector);
+        router.swap(address(tokenIn), address(tokenIn), 1e18, 0, "");
+    }
+
     function test_swap_revertsOnSlippage() public {
         externalRouter.setExchangeRate(0.5e18);
         tokenIn.mint(address(this), SWAP_AMOUNT);

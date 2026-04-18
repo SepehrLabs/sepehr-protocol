@@ -6,6 +6,7 @@ import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockAavePool} from "../../helpers/MockAavePool.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {SimpleCallback} from "../../helpers/SimpleCallback.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract AaveFlashLoanProviderTest is Test {
@@ -120,6 +121,16 @@ contract AaveFlashLoanProviderTest is Test {
 
     function test_isAvailable_trueWhenExactBalance() public view {
         assertTrue(provider.isAvailable(address(token), POOL_LIQUIDITY));
+    }
+
+    // C8: after a successful flash loan, the Pool's allowance on the flash provider must be
+    // zero so that dust from non-standard ERC20s cannot persist across invocations.
+    function test_flashBorrow_zeroesPoolAllowance() public {
+        uint256 fee = (BORROW_AMOUNT * pool.premiumTotal()) / 10_000;
+        token.mint(address(callback), fee);
+
+        provider.flashBorrow(address(token), BORROW_AMOUNT, address(callback), "c8");
+        assertEq(IERC20(address(token)).allowance(address(provider), address(pool)), 0);
     }
 
     // C2: a re-entrant flashBorrow must revert rather than overwrite the callback slot.

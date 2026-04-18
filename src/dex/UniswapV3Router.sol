@@ -50,6 +50,9 @@ contract UniswapV3Router is IDexRouter, ReentrancyGuard {
         bytes calldata routeData
     ) external override nonReentrant returns (uint256 amountOut) {
         if (amountIn == 0) revert SepehrErrors.ZeroAmount();
+        // D12: fail fast on tokenIn == tokenOut instead of letting Uniswap revert deep in the
+        // swap path with an opaque error. Saves an external call and makes the misconfig obvious.
+        if (tokenIn == tokenOut) revert SepehrErrors.SameToken();
 
         uint24 fee = DEFAULT_FEE;
         uint160 sqrtPriceLimitX96 = 0;

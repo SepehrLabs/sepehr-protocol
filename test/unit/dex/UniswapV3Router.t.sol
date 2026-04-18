@@ -119,6 +119,13 @@ contract UniswapV3RouterTest is Test {
         router.swap(address(tokenIn), address(tokenOut), 0, 0, "");
     }
 
+    function test_swap_revertsOnSameToken() public {
+        // Audit D12: self-swaps short-circuit with SameToken instead of bubbling a deep
+        // Uniswap revert.
+        vm.expectRevert(SepehrErrors.SameToken.selector);
+        router.swap(address(tokenIn), address(tokenIn), 1e18, 0, "");
+    }
+
     function test_swap_revertsOnSlippage() public {
         swapRouter.setExchangeRate(0.5e18);
         tokenIn.mint(address(this), SWAP_AMOUNT);

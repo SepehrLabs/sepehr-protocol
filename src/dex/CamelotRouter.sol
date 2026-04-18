@@ -38,6 +38,9 @@ contract CamelotRouter is IDexRouter, ReentrancyGuard {
         bytes calldata routeData
     ) external override nonReentrant returns (uint256 amountOut) {
         if (amountIn == 0) revert SepehrErrors.ZeroAmount();
+        // D12: Camelot would bubble up a generic `INSUFFICIENT_INPUT_AMOUNT` / pair-missing
+        // revert on a self-swap; short-circuit with a typed error here.
+        if (tokenIn == tokenOut) revert SepehrErrors.SameToken();
 
         uint256 deadline = _decodeDeadline(routeData);
 

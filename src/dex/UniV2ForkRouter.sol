@@ -40,6 +40,9 @@ contract UniV2ForkRouter is IDexRouter, ReentrancyGuard {
         bytes calldata routeData
     ) external override nonReentrant returns (uint256 amountOut) {
         if (amountIn == 0) revert SepehrErrors.ZeroAmount();
+        // D12: fail fast on self-swaps instead of letting the external router revert
+        // deep in the path-resolution logic with an opaque `PAIR_NOT_EXISTS`-style error.
+        if (tokenIn == tokenOut) revert SepehrErrors.SameToken();
 
         uint256 deadline = _decodeDeadline(routeData);
 

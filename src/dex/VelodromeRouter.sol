@@ -49,6 +49,9 @@ contract VelodromeRouter is IDexRouter, ReentrancyGuard {
         bytes calldata routeData
     ) external override nonReentrant returns (uint256 amountOut) {
         if (amountIn == 0) revert SepehrErrors.ZeroAmount();
+        // D12: self-swap short-circuit — Velodrome would revert inside the route resolution
+        // with an opaque error; fail early with a typed signal instead.
+        if (tokenIn == tokenOut) revert SepehrErrors.SameToken();
 
         (uint256 deadline, bool stable, address factory) = _decodeRoute(routeData);
 
