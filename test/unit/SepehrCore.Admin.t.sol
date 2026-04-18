@@ -14,15 +14,9 @@ import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockChainlinkAggregator} from "../helpers/MockChainlinkAggregator.sol";
 
 contract MockERC20 is ERC20 {
-    constructor(
-        string memory name_,
-        string memory symbol_
-    ) ERC20(name_, symbol_) {}
+    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
 
-    function mint(
-        address to,
-        uint256 amount
-    ) external {
+    function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
 }
@@ -732,6 +726,38 @@ contract SepehrCoreAdminTest is Test {
         assertEq(core.TIER_PRICES_ANNUAL_USD_6(2), 1_920_000_000);
     }
 
+    // ─── A22: full-array getters for tier pricing state ────────
+
+    function test_getTierFeeBps_returnsAllFour() public view {
+        uint256[4] memory arr = core.getTierFeeBps();
+        assertEq(arr[0], 20);
+        assertEq(arr[1], 10);
+        assertEq(arr[2], 5);
+        assertEq(arr[3], 5);
+    }
+
+    function test_getTierPricesMonthly_returnsAllThree() public view {
+        uint256[3] memory arr = core.getTierPricesMonthly();
+        assertEq(arr[0], 9_000_000);
+        assertEq(arr[1], 49_000_000);
+        assertEq(arr[2], 200_000_000);
+    }
+
+    function test_getTierPricesAnnual_returnsAllThree() public view {
+        uint256[3] memory arr = core.getTierPricesAnnual();
+        assertEq(arr[0], 86_400_000);
+        assertEq(arr[1], 470_400_000);
+        assertEq(arr[2], 1_920_000_000);
+    }
+
+    function test_getTierMaxCollateralUsd_returnsAllFour() public view {
+        uint256[4] memory arr = core.getTierMaxCollateralUsd();
+        assertEq(arr[0], 15_000e8);
+        assertEq(arr[1], 100_000e8);
+        assertEq(arr[2], 300_000e8);
+        assertEq(arr[3], type(uint256).max);
+    }
+
     // ─── D1/D4: canonical-route registry ───────────────────────
 
     function test_setCanonicalRoute_storesData() public {
@@ -972,15 +998,11 @@ contract SepehrCoreAdminTest is Test {
         core.setStrictOraclePricing(true);
     }
 
-    function _readAssetOracle(
-        address asset
-    ) internal view returns (address agg, uint256 stale) {
+    function _readAssetOracle(address asset) internal view returns (address agg, uint256 stale) {
         (agg, stale) = _callAssetOracles(asset);
     }
 
-    function _callAssetOracles(
-        address asset
-    ) internal view returns (address agg, uint256 stale) {
+    function _callAssetOracles(address asset) internal view returns (address agg, uint256 stale) {
         (bool ok, bytes memory ret) = address(core).staticcall(abi.encodeWithSignature("assetOracles(address)", asset));
         require(ok, "assetOracles call failed");
         (agg, stale) = abi.decode(ret, (address, uint256));

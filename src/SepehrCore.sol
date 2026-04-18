@@ -221,13 +221,9 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @dev A6: the legacy `_subscriptionOracle` constructor slot was removed because the oracle
     /// was never read. Per-position USD value comes from `adapter.getCollateralValueUsd()`, which
     /// already exists for the tier-cap path and is trust-minimized by timelock-registered adapters.
-    constructor(
-        address _owner,
-        address _timelock,
-        address _pauseGuardian,
-        address _usdc,
-        uint256 _minCollateralUsd
-    ) Ownable(_owner) {
+    constructor(address _owner, address _timelock, address _pauseGuardian, address _usdc, uint256 _minCollateralUsd)
+        Ownable(_owner)
+    {
         if (_timelock == address(0)) revert SepehrErrors.ZeroAddress();
         if (_pauseGuardian == address(0)) revert SepehrErrors.ZeroAddress();
         if (_usdc == address(0)) revert SepehrErrors.ZeroAddress();
@@ -241,10 +237,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     // ─── User: Subscriptions ─────────────────────────────────────
 
     /// @inheritdoc ISepehrCore
-    function subscribe(
-        uint8 tier,
-        bool annual
-    ) external override nonReentrant whenNotPaused {
+    function subscribe(uint8 tier, bool annual) external override nonReentrant whenNotPaused {
         if (tier == 0 || tier > 4) revert SepehrErrors.InvalidTier();
         if (tier == 4) revert SepehrErrors.TitanSelfSubscribeNotAllowed();
         if (_subscriptions[msg.sender].expiresAt > block.timestamp) {
@@ -256,9 +249,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         ownerFeeBalances[address(usdc)] += price;
 
         uint256 duration = annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
-        _subscriptions[msg.sender] = Subscription({
-            tier: tier, annual: annual, expiresAt: block.timestamp + duration, collateralValueUsdSnapshot: 0
-        });
+        _subscriptions[msg.sender] = Subscription({tier: tier, annual: annual, expiresAt: block.timestamp + duration});
 
         emit SepehrEvents.Subscribed(msg.sender, block.timestamp + duration, tier, annual, block.chainid);
     }
@@ -290,10 +281,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// Downgrades (new price ≤ credit) are allowed and simply refund the difference; same-
     /// tier-same-cadence calls revert with `SameTierUpgrade`. Titan (tier 4) remains
     /// owner-granted only.
-    function upgradeTier(
-        uint8 newTier,
-        bool newAnnual
-    ) external override nonReentrant whenNotPaused {
+    function upgradeTier(uint8 newTier, bool newAnnual) external override nonReentrant whenNotPaused {
         if (newTier == 0 || newTier > 4) revert SepehrErrors.InvalidTier();
         if (newTier == 4) revert SepehrErrors.TitanSelfSubscribeNotAllowed();
 
@@ -331,7 +319,6 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         sub.tier = newTier;
         sub.annual = newAnnual;
         sub.expiresAt = block.timestamp + newDuration;
-        sub.collateralValueUsdSnapshot = 0;
 
         emit SepehrEvents.TierUpgraded(msg.sender, oldTier, newTier);
         emit SepehrEvents.Subscribed(msg.sender, sub.expiresAt, newTier, newAnnual, block.chainid);
@@ -385,12 +372,11 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     // ─── User: Position Protection ──────────────────────────────
 
     /// @inheritdoc ISepehrCore
-    function enableProtection(
-        bytes32 protocolKey,
-        uint256 thresholdHF,
-        uint256 maxSlippageBps,
-        uint256 repayPercentBps
-    ) external override whenNotPaused {
+    function enableProtection(bytes32 protocolKey, uint256 thresholdHF, uint256 maxSlippageBps, uint256 repayPercentBps)
+        external
+        override
+        whenNotPaused
+    {
         _requireActiveSubscription(msg.sender);
         _validateProtectionParams(thresholdHF, maxSlippageBps, repayPercentBps);
 
@@ -426,9 +412,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     }
 
     /// @inheritdoc ISepehrCore
-    function disableProtection(
-        bytes32 protocolKey
-    ) external override {
+    function disableProtection(bytes32 protocolKey) external override {
         if (!_protections[msg.sender][protocolKey].enabled) {
             revert SepehrErrors.ProtectionNotEnabled(msg.sender, protocolKey);
         }
@@ -438,12 +422,11 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     }
 
     /// @inheritdoc ISepehrCore
-    function updateProtection(
-        bytes32 protocolKey,
-        uint256 thresholdHF,
-        uint256 maxSlippageBps,
-        uint256 repayPercentBps
-    ) external override whenNotPaused {
+    function updateProtection(bytes32 protocolKey, uint256 thresholdHF, uint256 maxSlippageBps, uint256 repayPercentBps)
+        external
+        override
+        whenNotPaused
+    {
         if (!_protections[msg.sender][protocolKey].enabled) {
             revert SepehrErrors.ProtectionNotEnabled(msg.sender, protocolKey);
         }
@@ -598,12 +581,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     // ─── Flash Loan Callback ─────────────────────────────────────
 
     /// @inheritdoc ISepehrCallback
-    function onFlashLoan(
-        address asset,
-        uint256 amount,
-        uint256 fee,
-        bytes calldata data
-    ) external override {
+    function onFlashLoan(address asset, uint256 amount, uint256 fee, bytes calldata data) external override {
         if (msg.sender != _activeFlashProvider) {
             revert SepehrErrors.InvalidFlashLoanCallback();
         }
@@ -704,9 +682,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// observability. Per-asset accounting is preserved (subscription USDC vs. per-debt-asset
     /// trigger revenue). Reverts if the per-asset balance is zero.
     /// @param asset The ERC-20 address to withdraw.
-    function withdrawOwnerFees(
-        address asset
-    ) external nonReentrant {
+    function withdrawOwnerFees(address asset) external nonReentrant {
         if (msg.sender != owner()) revert SepehrErrors.NotOwner();
         if (asset == address(0)) revert SepehrErrors.ZeroAddress();
         uint256 amount = ownerFeeBalances[asset];
@@ -721,9 +697,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @dev Restricted implicitly by per-keeper accounting: only the keeper that earned a fee can claim it.
     /// Asset must be provided because a keeper may have accrued fees across multiple debt assets.
     /// @param asset The ERC-20 address to withdraw (the debt asset of the trigger that paid the keeper).
-    function withdrawKeeperFees(
-        address asset
-    ) external nonReentrant {
+    function withdrawKeeperFees(address asset) external nonReentrant {
         if (asset == address(0)) revert SepehrErrors.ZeroAddress();
         uint256 amount = keeperFeeBalances[msg.sender][asset];
         if (amount == 0) revert SepehrErrors.ZeroAmount();
@@ -772,10 +746,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// during trigger execution. Reverts if an adapter is already registered for the key.
     /// @param protocolKey Unique identifier for the protocol (e.g. keccak256("aave-v3-ethereum")).
     /// @param adapter Address of the contract implementing IProtocolAdapter.
-    function addAdapter(
-        bytes32 protocolKey,
-        address adapter
-    ) external onlyTimelock {
+    function addAdapter(bytes32 protocolKey, address adapter) external onlyTimelock {
         if (adapter == address(0)) revert SepehrErrors.ZeroAddress();
         if (address(adapters[protocolKey].adapter) != address(0)) {
             revert SepehrErrors.AdapterAlreadyRegistered(protocolKey);
@@ -789,9 +760,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @dev Timelock-gated because removing an adapter disables protection for every user
     /// relying on it. Users should be notified before removal.
     /// @param protocolKey Identifier of the adapter to remove.
-    function removeAdapter(
-        bytes32 protocolKey
-    ) external onlyTimelock {
+    function removeAdapter(bytes32 protocolKey) external onlyTimelock {
         if (address(adapters[protocolKey].adapter) == address(0)) {
             revert SepehrErrors.AdapterNotRegistered(protocolKey);
         }
@@ -804,10 +773,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// while preserving historical state (addedAt, registration).
     /// @param protocolKey Identifier of the adapter to toggle.
     /// @param enabled True to activate, false to pause the adapter.
-    function setAdapterEnabled(
-        bytes32 protocolKey,
-        bool enabled
-    ) external onlyTimelock {
+    function setAdapterEnabled(bytes32 protocolKey, bool enabled) external onlyTimelock {
         if (address(adapters[protocolKey].adapter) == address(0)) {
             revert SepehrErrors.AdapterNotRegistered(protocolKey);
         }
@@ -823,9 +789,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @dev Timelock-gated because keepers receive 15% of trigger fees and can invoke flash loans;
     /// adding an untrusted keeper would be a significant attack vector.
     /// @param keeper Address to grant keeper role.
-    function addKeeper(
-        address keeper
-    ) external onlyTimelock {
+    function addKeeper(address keeper) external onlyTimelock {
         if (keeper == address(0)) revert SepehrErrors.ZeroAddress();
         keepers[keeper] = true;
         emit SepehrEvents.KeeperAdded(keeper);
@@ -834,9 +798,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @notice Revoke keeper privileges from an address.
     /// @dev Timelock-gated. Already-accrued fees remain claimable by the keeper via `withdrawKeeperFees`.
     /// @param keeper Address to revoke.
-    function removeKeeper(
-        address keeper
-    ) external onlyTimelock {
+    function removeKeeper(address keeper) external onlyTimelock {
         keepers[keeper] = false;
         emit SepehrEvents.KeeperRemoved(keeper);
     }
@@ -849,10 +811,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @param tier Tier index in [1, 4]; reverts otherwise.
     /// @param newBps Replacement fee in basis points applied to the repaid amount; must be
     /// ≤ `MAX_TIER_FEE_BPS`.
-    function setTierFeeBps(
-        uint8 tier,
-        uint256 newBps
-    ) external onlyTimelock {
+    function setTierFeeBps(uint8 tier, uint256 newBps) external onlyTimelock {
         if (tier == 0 || tier > 4) revert SepehrErrors.InvalidTier();
         if (newBps > MAX_TIER_FEE_BPS) {
             revert SepehrErrors.TierFeeBpsTooHigh(newBps, MAX_TIER_FEE_BPS);
@@ -874,11 +833,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @param newPrice Replacement price in USDC-6 units; must be within
     /// `[oldPrice * (10_000 - MAX_TIER_PRICE_DEVIATION_BPS)/10_000,
     ///   oldPrice * (10_000 + MAX_TIER_PRICE_DEVIATION_BPS)/10_000]`.
-    function setTierPrice(
-        uint8 tier,
-        bool annual,
-        uint256 newPrice
-    ) external onlyTimelock {
+    function setTierPrice(uint8 tier, bool annual, uint256 newPrice) external onlyTimelock {
         if (tier == 0 || tier >= 4) revert SepehrErrors.InvalidTier();
         if (newPrice == 0) revert SepehrErrors.ZeroAmount();
         uint256 old = annual ? TIER_PRICES_ANNUAL_USD_6[tier - 1] : TIER_PRICES_MONTHLY_USD_6[tier - 1];
@@ -899,9 +854,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @dev Timelock-gated. Setting to 0 disables the gate entirely (useful for dev/test or
     /// emergency relief). A7: previously dead state; now enforced in `enableProtection`.
     /// @param newMin New minimum, in USD-8 units (e.g. 500e8 = $500).
-    function setMinCollateralUsd(
-        uint256 newMin
-    ) external onlyTimelock {
+    function setMinCollateralUsd(uint256 newMin) external onlyTimelock {
         uint256 old = minCollateralUsd;
         minCollateralUsd = newMin;
         emit SepehrEvents.MinCollateralUsdUpdated(old, newMin);
@@ -912,10 +865,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// onboarded reactively. Cannot be self-subscribed through `subscribe`.
     /// @param user Recipient of the Titan subscription.
     /// @param durationSeconds Length of the subscription starting from now.
-    function grantTitanSubscription(
-        address user,
-        uint256 durationSeconds
-    ) external {
+    function grantTitanSubscription(address user, uint256 durationSeconds) external {
         if (msg.sender != owner()) revert SepehrErrors.NotOwner();
         if (user == address(0)) revert SepehrErrors.ZeroAddress();
         if (durationSeconds == 0) revert SepehrErrors.ZeroAmount();
@@ -929,9 +879,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             revert SepehrErrors.SubscriptionAlreadyActive();
         }
 
-        _subscriptions[user] = Subscription({
-            tier: 4, annual: false, expiresAt: block.timestamp + durationSeconds, collateralValueUsdSnapshot: 0
-        });
+        _subscriptions[user] = Subscription({tier: 4, annual: false, expiresAt: block.timestamp + durationSeconds});
 
         emit SepehrEvents.TitanSubscriptionGranted(user, block.timestamp + durationSeconds);
     }
@@ -940,9 +888,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @dev Timelock-gated because the callback `onFlashLoan` trusts `msg.sender` to be the active
     /// provider; whitelisting a malicious contract would let it forge callbacks.
     /// @param provider Address of an IFlashLoanProvider implementation.
-    function addFlashLoanProvider(
-        address provider
-    ) external onlyTimelock {
+    function addFlashLoanProvider(address provider) external onlyTimelock {
         if (provider == address(0)) revert SepehrErrors.ZeroAddress();
         allowedFlashProviders[provider] = true;
         emit SepehrEvents.FlashLoanProviderAdded(provider);
@@ -951,9 +897,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @notice Remove a flash loan provider from the whitelist.
     /// @dev Timelock-gated. Pending executions continue using the provider until the next block.
     /// @param provider Address to delist.
-    function removeFlashLoanProvider(
-        address provider
-    ) external onlyTimelock {
+    function removeFlashLoanProvider(address provider) external onlyTimelock {
         allowedFlashProviders[provider] = false;
         emit SepehrEvents.FlashLoanProviderRemoved(provider);
     }
@@ -962,9 +906,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @dev Timelock-gated because the router receives collateral approvals and is trusted to
     /// honor the `minOut` amount; a malicious router could drain positions.
     /// @param router Address of an IDexRouter implementation.
-    function addDexRouter(
-        address router
-    ) external onlyTimelock {
+    function addDexRouter(address router) external onlyTimelock {
         if (router == address(0)) revert SepehrErrors.ZeroAddress();
         allowedDexRouters[router] = true;
         emit SepehrEvents.DexRouterAdded(router);
@@ -975,9 +917,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// A14: emits `DexRouterRemoved` so off-chain monitors can detect the delisting — earlier
     /// versions silently updated the mapping, which diverged from every other admin function.
     /// @param router Address to delist.
-    function removeDexRouter(
-        address router
-    ) external onlyTimelock {
+    function removeDexRouter(address router) external onlyTimelock {
         allowedDexRouters[router] = false;
         emit SepehrEvents.DexRouterRemoved(router);
     }
@@ -989,12 +929,10 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// router's `swap` and must match whatever schema the router expects
     /// (UniswapV3: `abi.encode(uint24 fee[, uint160 sqrtPriceLimitX96])`; Velodrome:
     /// `abi.encode(bool stable)`; TraderJoe: `abi.encode(uint256 binStep, uint8 version)`, etc.).
-    function setCanonicalRoute(
-        address router,
-        address tokenIn,
-        address tokenOut,
-        bytes calldata data
-    ) external onlyTimelock {
+    function setCanonicalRoute(address router, address tokenIn, address tokenOut, bytes calldata data)
+        external
+        onlyTimelock
+    {
         if (router == address(0) || tokenIn == address(0) || tokenOut == address(0)) {
             revert SepehrErrors.ZeroAddress();
         }
@@ -1008,11 +946,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @notice Clear a previously registered canonical route.
     /// @dev Timelock-gated. After clearing, the pair falls back to keeper-supplied routeData
     /// (unless `strictCanonicalRoutes` is enabled, in which case the trigger will revert).
-    function clearCanonicalRoute(
-        address router,
-        address tokenIn,
-        address tokenOut
-    ) external onlyTimelock {
+    function clearCanonicalRoute(address router, address tokenIn, address tokenOut) external onlyTimelock {
         bytes32 key = _canonicalRouteKey(router, tokenIn, tokenOut);
         delete _canonicalRouteData[key];
         canonicalRouteSet[key] = false;
@@ -1023,9 +957,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @dev Timelock-gated. When enabled, triggers revert if no canonical route is registered
     /// for the `(router, collateralAsset, debtAsset)` triple — eliminating the keeper-supplied
     /// `dexRouteData` trust surface entirely. Disable while the registry is being populated.
-    function setStrictCanonicalRoutes(
-        bool enabled
-    ) external onlyTimelock {
+    function setStrictCanonicalRoutes(bool enabled) external onlyTimelock {
         strictCanonicalRoutes = enabled;
         emit SepehrEvents.StrictCanonicalRoutesUpdated(enabled);
     }
@@ -1033,21 +965,17 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @notice View the canonical `routeData` registered for a `(router, tokenIn, tokenOut)` triple.
     /// @return set Whether a canonical entry is registered for the triple.
     /// @return data The registered routeData bytes (empty if `set` is false).
-    function getCanonicalRoute(
-        address router,
-        address tokenIn,
-        address tokenOut
-    ) external view returns (bool set, bytes memory data) {
+    function getCanonicalRoute(address router, address tokenIn, address tokenOut)
+        external
+        view
+        returns (bool set, bytes memory data)
+    {
         bytes32 key = _canonicalRouteKey(router, tokenIn, tokenOut);
         set = canonicalRouteSet[key];
         data = _canonicalRouteData[key];
     }
 
-    function _canonicalRouteKey(
-        address router,
-        address tokenIn,
-        address tokenOut
-    ) private pure returns (bytes32) {
+    function _canonicalRouteKey(address router, address tokenIn, address tokenOut) private pure returns (bytes32) {
         return keccak256(abi.encode(router, tokenIn, tokenOut));
     }
 
@@ -1060,11 +988,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// disable the floor. Chainlink's mainstream USD feeds are 8-decimal; the call reverts if
     /// the aggregator reports any other decimal count so the in-callback math does not need
     /// to normalize.
-    function setAssetOracle(
-        address asset,
-        address aggregator,
-        uint256 maxStaleness
-    ) external onlyTimelock {
+    function setAssetOracle(address asset, address aggregator, uint256 maxStaleness) external onlyTimelock {
         if (asset == address(0) || aggregator == address(0)) revert SepehrErrors.ZeroAddress();
         if (maxStaleness == 0 || maxStaleness > MAX_ORACLE_STALENESS) {
             revert SepehrErrors.InvalidOracleStaleness(maxStaleness);
@@ -1081,9 +1005,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @dev Timelock-gated. After clearing, swaps involving `asset` fall back to the
     /// flash-loan solvency floor only — unless `strictOraclePricing` is enabled, in which
     /// case those swaps will revert with `MissingAssetOracle`.
-    function clearAssetOracle(
-        address asset
-    ) external onlyTimelock {
+    function clearAssetOracle(address asset) external onlyTimelock {
         delete assetOracles[asset];
         emit SepehrEvents.AssetOracleCleared(asset);
     }
@@ -1092,9 +1014,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @dev Timelock-gated. When enabled, any swap whose collateral or debt asset lacks a
     /// registered oracle reverts — eliminating the implicit "no oracle → no floor" relaxation
     /// and forcing every live pair through the oracle check.
-    function setStrictOraclePricing(
-        bool enabled
-    ) external onlyTimelock {
+    function setStrictOraclePricing(bool enabled) external onlyTimelock {
         strictOraclePricing = enabled;
         emit SepehrEvents.StrictOraclePricingUpdated(enabled);
     }
@@ -1115,12 +1035,11 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// Price decimals cancel because `setAssetOracle` enforces `ORACLE_PRICE_DECIMALS` on
     /// every registered feed. `Math.mulDiv` is used to avoid intermediate overflow at the
     /// outer edges of the input space (large amountIn × large price).
-    function _oracleMinOut(
-        address collateralAsset,
-        address debtAsset,
-        uint256 amountIn,
-        uint256 maxSlippageBps
-    ) internal view returns (uint256) {
+    function _oracleMinOut(address collateralAsset, address debtAsset, uint256 amountIn, uint256 maxSlippageBps)
+        internal
+        view
+        returns (uint256)
+    {
         AssetOracle memory collOracle = assetOracles[collateralAsset];
         AssetOracle memory debtOracle = assetOracles[debtAsset];
         if (address(collOracle.aggregator) == address(0) || address(debtOracle.aggregator) == address(0)) {
@@ -1144,10 +1063,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         return (expectedOut * (10_000 - maxSlippageBps)) / 10_000;
     }
 
-    function _readOraclePrice(
-        address asset,
-        AssetOracle memory oracle
-    ) private view returns (uint256) {
+    function _readOraclePrice(address asset, AssetOracle memory oracle) private view returns (uint256) {
         (, int256 answer,, uint256 updatedAt,) = oracle.aggregator.latestRoundData();
         if (answer <= 0) revert SepehrErrors.InvalidOraclePrice(asset, answer);
         if (block.timestamp > updatedAt && block.timestamp - updatedAt > oracle.maxStaleness) {
@@ -1162,10 +1078,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// is `... / 10^(ORACLE_PRICE_DECIMALS - 6)` → `... / 100`. Returns 0 if the debt asset has no
     /// registered oracle — callers treat 0 as "no save credit accrued" rather than a revert, so
     /// triggers still succeed on assets during the phased rollout of oracle coverage.
-    function _computeRepayValueUsd6(
-        address debtAsset,
-        uint256 repayAmount
-    ) internal view returns (uint256) {
+    function _computeRepayValueUsd6(address debtAsset, uint256 repayAmount) internal view returns (uint256) {
         AssetOracle memory debtOracle = assetOracles[debtAsset];
         if (address(debtOracle.aggregator) == address(0)) return 0;
         uint256 debtPrice = _readOraclePrice(debtAsset, debtOracle);
@@ -1178,10 +1091,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// removal; ordering is not contractually stable (callers consume the list as an unordered
     /// set). No-op if the key is missing, since `disableProtection` already verifies
     /// `_protections[user][protocolKey].enabled` before calling.
-    function _removeUserProtocol(
-        address user,
-        bytes32 protocolKey
-    ) private {
+    function _removeUserProtocol(address user, bytes32 protocolKey) private {
         bytes32[] storage keys = _userProtocols[user];
         uint256 n = keys.length;
         for (uint256 i = 0; i < n; i++) {
@@ -1197,9 +1107,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @dev Timelock-gated so the guardian cannot be swapped unilaterally by a compromised owner
     /// without the 48h delay announcing it on-chain.
     /// @param newGuardian Replacement guardian address.
-    function setPauseGuardian(
-        address newGuardian
-    ) external onlyTimelock {
+    function setPauseGuardian(address newGuardian) external onlyTimelock {
         if (newGuardian == address(0)) revert SepehrErrors.ZeroAddress();
         address old = pauseGuardian;
         pauseGuardian = newGuardian;
@@ -1209,58 +1117,70 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     // ─── Views ───────────────────────────────────────────────────
 
     /// @inheritdoc ISepehrCore
-    function getSubscription(
-        address user
-    ) external view override returns (Subscription memory) {
+    function getSubscription(address user) external view override returns (Subscription memory) {
         return _subscriptions[user];
     }
 
     /// @inheritdoc ISepehrCore
-    function getProtection(
-        address user,
-        bytes32 protocolKey
-    ) external view override returns (PositionProtection memory) {
+    function getProtection(address user, bytes32 protocolKey)
+        external
+        view
+        override
+        returns (PositionProtection memory)
+    {
         return _protections[user][protocolKey];
     }
 
     /// @inheritdoc ISepehrCore
-    function isKeeper(
-        address addr
-    ) external view override returns (bool) {
+    function isKeeper(address addr) external view override returns (bool) {
         return keepers[addr];
     }
 
     /// @inheritdoc ISepehrCore
-    function getSaveCredits(
-        address user
-    ) external view override returns (uint256) {
+    function getSaveCredits(address user) external view override returns (uint256) {
         return saveCredits[user];
     }
 
     /// @notice A18: return the ordered list of protocol keys for which `user` has protection
     /// currently enabled. Populated by `enableProtection` / `disableProtection` and cleared by
     /// `unsubscribe`. Ordering is not stable across `disableProtection` calls (swap-and-pop).
-    function getUserProtocols(
-        address user
-    ) external view returns (bytes32[] memory) {
+    function getUserProtocols(address user) external view returns (bytes32[] memory) {
         return _userProtocols[user];
+    }
+
+    /// @notice A22: return every tier's fee bps in a single call so off-chain consumers
+    /// don't have to issue four separate indexed reads on `TIER_FEE_BPS`.
+    function getTierFeeBps() external view returns (uint256[4] memory) {
+        return TIER_FEE_BPS;
+    }
+
+    /// @notice A22: return every tier's monthly USDC price (6 decimals) in one call.
+    function getTierPricesMonthly() external view returns (uint256[3] memory) {
+        return TIER_PRICES_MONTHLY_USD_6;
+    }
+
+    /// @notice A22: return every tier's annual USDC price (6 decimals) in one call.
+    function getTierPricesAnnual() external view returns (uint256[3] memory) {
+        return TIER_PRICES_ANNUAL_USD_6;
+    }
+
+    /// @notice A22: return every tier's collateral cap (USD-8) in one call.
+    function getTierMaxCollateralUsd() external view returns (uint256[4] memory) {
+        return TIER_MAX_COLLATERAL_USD_8;
     }
 
     // ─── Internal ────────────────────────────────────────────────
 
-    function _requireActiveSubscription(
-        address user
-    ) internal view {
+    function _requireActiveSubscription(address user) internal view {
         Subscription storage sub = _subscriptions[user];
         if (sub.tier == 0) revert SepehrErrors.SubscriptionNotFound();
         if (sub.expiresAt <= block.timestamp) revert SepehrErrors.SubscriptionExpired();
     }
 
-    function _validateProtectionParams(
-        uint256 thresholdHF,
-        uint256 maxSlippageBps,
-        uint256 repayPercentBps
-    ) internal pure {
+    function _validateProtectionParams(uint256 thresholdHF, uint256 maxSlippageBps, uint256 repayPercentBps)
+        internal
+        pure
+    {
         if (thresholdHF < MIN_HF_THRESHOLD) {
             revert SepehrErrors.ThresholdTooLow(thresholdHF, MIN_HF_THRESHOLD);
         }
@@ -1272,12 +1192,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         }
     }
 
-    function _borrowFlashLoan(
-        address[] calldata providers,
-        address asset,
-        uint256 amount,
-        bytes memory data
-    ) internal {
+    function _borrowFlashLoan(address[] calldata providers, address asset, uint256 amount, bytes memory data) internal {
         for (uint256 i = 0; i < providers.length; i++) {
             if (!allowedFlashProviders[providers[i]]) continue;
 

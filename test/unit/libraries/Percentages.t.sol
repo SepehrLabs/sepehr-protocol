@@ -55,16 +55,12 @@ contract PercentagesTest is Test {
         assertEq(keeperShare, 0);
     }
 
-    function testFuzz_splitFee_sumsToTotal(
-        uint128 total
-    ) public pure {
+    function testFuzz_splitFee_sumsToTotal(uint128 total) public pure {
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(uint256(total));
         assertEq(ownerShare + keeperShare, uint256(total));
     }
 
-    function testFuzz_splitFee_ownerGetsMore(
-        uint128 total
-    ) public pure {
+    function testFuzz_splitFee_ownerGetsMore(uint128 total) public pure {
         vm.assume(total > 10);
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(uint256(total));
         assertGe(ownerShare, keeperShare);
@@ -75,5 +71,12 @@ contract PercentagesTest is Test {
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(1);
         assertEq(ownerShare, 0);
         assertEq(keeperShare, 1);
+    }
+
+    /// @dev A21: the 85/15 split is expressed as named bps constants that sum to BPS_DENOMINATOR.
+    function test_feeSplitConstants_sumToDenominator() public pure {
+        assertEq(Percentages.OWNER_FEE_SPLIT_BPS, 8500);
+        assertEq(Percentages.KEEPER_FEE_SPLIT_BPS, 1500);
+        assertEq(Percentages.OWNER_FEE_SPLIT_BPS + Percentages.KEEPER_FEE_SPLIT_BPS, Percentages.BPS_DENOMINATOR);
     }
 }
