@@ -14,9 +14,15 @@ import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockChainlinkAggregator} from "../helpers/MockChainlinkAggregator.sol";
 
 contract MockERC20 is ERC20 {
-    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
+    constructor(
+        string memory name_,
+        string memory symbol_
+    ) ERC20(name_, symbol_) {}
 
-    function mint(address to, uint256 amount) external {
+    function mint(
+        address to,
+        uint256 amount
+    ) external {
         _mint(to, amount);
     }
 }
@@ -998,11 +1004,33 @@ contract SepehrCoreAdminTest is Test {
         core.setStrictOraclePricing(true);
     }
 
-    function _readAssetOracle(address asset) internal view returns (address agg, uint256 stale) {
+    // ─── C2: renounceOwnership must be disabled ───────────────────────
+
+    /// @dev C2: allowing `renounceOwnership` would permanently disable fee withdrawal,
+    /// adapter registration, and every timelock-gated mutation — the override must revert
+    /// regardless of caller identity.
+    function test_renounceOwnership_revertsFromOwner() public {
+        vm.expectRevert(SepehrErrors.OwnershipCannotBeRenounced.selector);
+        core.renounceOwnership();
+    }
+
+    function test_renounceOwnership_revertsFromNonOwner() public {
+        // Ownable gates `renounceOwnership` to the owner; the override runs first on any
+        // call path (it's `public pure`), so a non-owner also sees our custom error.
+        vm.prank(makeAddr("random"));
+        vm.expectRevert(SepehrErrors.OwnershipCannotBeRenounced.selector);
+        core.renounceOwnership();
+    }
+
+    function _readAssetOracle(
+        address asset
+    ) internal view returns (address agg, uint256 stale) {
         (agg, stale) = _callAssetOracles(asset);
     }
 
-    function _callAssetOracles(address asset) internal view returns (address agg, uint256 stale) {
+    function _callAssetOracles(
+        address asset
+    ) internal view returns (address agg, uint256 stale) {
         (bool ok, bytes memory ret) = address(core).staticcall(abi.encodeWithSignature("assetOracles(address)", asset));
         require(ok, "assetOracles call failed");
         (agg, stale) = abi.decode(ret, (address, uint256));

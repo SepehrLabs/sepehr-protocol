@@ -595,8 +595,17 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(alice);
         core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
-        collateralToken.mint(address(seqAdapter), REPAY_AMOUNT * 2);
-        debtToken.mint(address(dex), REPAY_AMOUNT * 2);
+        collateralToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
+        debtToken.mint(address(dex), REPAY_AMOUNT * 10);
+
+        // C1: cross-asset triggers size the collateral withdrawal via the oracle pair, so both
+        // sides must be registered. Matched 1:1 prices keep the sizing straightforward here.
+        MockChainlinkAggregator collAgg = new MockChainlinkAggregator(8, 1e8);
+        MockChainlinkAggregator debtAgg = new MockChainlinkAggregator(8, 1e8);
+        vm.startPrank(timelock);
+        core.setAssetOracle(address(collateralToken), address(collAgg), 1 hours);
+        core.setAssetOracle(address(debtToken), address(debtAgg), 1 hours);
+        vm.stopPrank();
 
         bytes memory canonical = abi.encode(uint24(500), uint160(42));
         vm.prank(timelock);
@@ -633,8 +642,16 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(alice);
         core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
 
-        collateralToken.mint(address(seqAdapter), REPAY_AMOUNT * 2);
-        debtToken.mint(address(dex), REPAY_AMOUNT * 2);
+        collateralToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
+        debtToken.mint(address(dex), REPAY_AMOUNT * 10);
+
+        // C1: cross-asset triggers require both oracles registered for safe sizing.
+        MockChainlinkAggregator collAgg = new MockChainlinkAggregator(8, 1e8);
+        MockChainlinkAggregator debtAgg = new MockChainlinkAggregator(8, 1e8);
+        vm.startPrank(timelock);
+        core.setAssetOracle(address(collateralToken), address(collAgg), 1 hours);
+        core.setAssetOracle(address(debtToken), address(debtAgg), 1 hours);
+        vm.stopPrank();
 
         vm.prank(timelock);
         core.setStrictCanonicalRoutes(true);
@@ -711,9 +728,12 @@ contract SepehrCoreTriggersTest is Test {
         assertEq(core.lastTriggerTime(alice, seqKey), block.timestamp);
     }
 
-    /// @dev Non-strict mode with oracles only partially registered must skip the floor
-    /// check entirely (so rollout can be phased without breaking triggers).
-    function test_execute_oracleFloor_skippedWhenOnlyOneSideRegistered() public {
+    /// @dev C1: cross-asset triggers size the collateral withdrawal via an inverse oracle
+    /// projection, so BOTH sides must be registered. Missing either oracle reverts via
+    /// `MissingAssetOracle`, wrapped by the flash-loan try/catch into `NoFlashLoanAvailable`.
+    /// (Previously the oracle-floor check was advisory and the trigger would silently run on
+    /// keeper-sized input — that was the unit-conflation bug C1 now closes.)
+    function test_execute_crossAsset_revertsWhenOnlyOneSideOracleRegistered() public {
         bytes32 seqKey = keccak256("SEQ_ORACLE_PARTIAL");
         _setupForSwap(seqKey);
 
@@ -725,10 +745,10 @@ contract SepehrCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
         vm.prank(keeper);
+        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         core.execute(
             alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
-        assertEq(core.lastTriggerTime(alice, seqKey), block.timestamp);
     }
 
     /// @dev Strict oracle pricing: a missing oracle for either side must block the

@@ -63,4 +63,6 @@ library SepehrErrors {
 
     error ZeroAddress();
     error ZeroAmount();
+
+    error OwnershipCannotBeRenounced();
 }

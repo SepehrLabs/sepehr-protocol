@@ -55,12 +55,16 @@ contract PercentagesTest is Test {
         assertEq(keeperShare, 0);
     }
 
-    function testFuzz_splitFee_sumsToTotal(uint128 total) public pure {
+    function testFuzz_splitFee_sumsToTotal(
+        uint128 total
+    ) public pure {
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(uint256(total));
         assertEq(ownerShare + keeperShare, uint256(total));
     }
 
-    function testFuzz_splitFee_ownerGetsMore(uint128 total) public pure {
+    function testFuzz_splitFee_ownerGetsMore(
+        uint128 total
+    ) public pure {
         vm.assume(total > 10);
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(uint256(total));
         assertGe(ownerShare, keeperShare);

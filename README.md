@@ -10,7 +10,7 @@ Solidity smart contracts for the Sepehr liquidation protection protocol.
 | `SepehrTimelock.sol` | Time-locked admin operations |
 
 ### Protocol Adapters
-Aave V3, Aave V4, Compound V2, Compound V3, Morpho Blue, Euler V2, Fluid, Curve Llamalend, Gearbox, Maker
+Aave V3, Aave V4, Compound V3, Morpho Blue, Euler V2, Maker, Spark, Seamless
 
 ### Flash Loan Providers
 Aave, Balancer, Uniswap V3

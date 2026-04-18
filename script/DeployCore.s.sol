@@ -22,7 +22,9 @@ contract DeployCore is Script {
         address[] memory executors = new address[](1);
         executors[0] = owner;
 
-        SepehrTimelock timelock = new SepehrTimelock(timelockDelay, proposers, executors, owner);
+        // C3: pass address(0) as admin so the timelock is self-administered. Granting TIMELOCK_ADMIN_ROLE
+        // to `owner` would let the owner bypass the delay via grantRole/revokeRole, defeating the 48h gate.
+        SepehrTimelock timelock = new SepehrTimelock(timelockDelay, proposers, executors, address(0));
         console.log("SepehrTimelock deployed at:", address(timelock));
 
         SepehrCore core = new SepehrCore(owner, address(timelock), pauseGuardian, usdcAddress, minCollateralUsd);

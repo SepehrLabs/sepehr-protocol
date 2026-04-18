@@ -12,23 +12,34 @@ library Percentages {
     uint256 internal constant KEEPER_FEE_SPLIT_BPS = BPS_DENOMINATOR - OWNER_FEE_SPLIT_BPS;
 
     /// @notice Apply a bps percentage to an amount, rounding down.
-    function applyBps(uint256 amount, uint256 bps) internal pure returns (uint256) {
+    function applyBps(
+        uint256 amount,
+        uint256 bps
+    ) internal pure returns (uint256) {
         return (amount * bps) / BPS_DENOMINATOR;
     }
 
     /// @notice Apply a bps percentage to an amount, rounding up.
-    function applyBpsRoundUp(uint256 amount, uint256 bps) internal pure returns (uint256) {
+    function applyBpsRoundUp(
+        uint256 amount,
+        uint256 bps
+    ) internal pure returns (uint256) {
         return (amount * bps + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
     }
 
     /// @notice Compute how many bps `part` is of `whole`.
-    function toBps(uint256 part, uint256 whole) internal pure returns (uint256) {
+    function toBps(
+        uint256 part,
+        uint256 whole
+    ) internal pure returns (uint256) {
         if (whole == 0) return 0;
         return (part * BPS_DENOMINATOR) / whole;
     }
 
     /// @notice Compute the owner share (85%) and keeper share (15%) of a fee.
-    function splitFee(uint256 totalFee) internal pure returns (uint256 ownerShare, uint256 keeperShare) {
+    function splitFee(
+        uint256 totalFee
+    ) internal pure returns (uint256 ownerShare, uint256 keeperShare) {
         ownerShare = (totalFee * OWNER_FEE_SPLIT_BPS) / BPS_DENOMINATOR;
         keeperShare = totalFee - ownerShare;
     }
