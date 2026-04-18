@@ -78,15 +78,33 @@ contract AaveV3AdapterTest is Test {
 
     // ─── checkDelegation ───────────────────────────────────────────────
 
-    function test_checkDelegation_returnsTrueWhenAllowanceGtZero() public {
+    function test_checkDelegation_returnsFalseWhenDustAllowance() public {
+        // Audit B20: dust approvals must not pass delegation — the trigger would
+        // revert on the aToken transferFrom that pulls the user's full share.
         vm.prank(user);
         aToken.approve(address(adapter), 1);
 
-        assertTrue(adapter.checkDelegation(user));
+        assertFalse(adapter.checkDelegation(user));
     }
 
     function test_checkDelegation_returnsFalseWhenAllowanceZero() public view {
         assertFalse(adapter.checkDelegation(user));
+    }
+
+    function test_checkDelegation_returnsFalseBelowThreshold() public {
+        // Audit B20: boundary — allowance just below the threshold fails.
+        vm.prank(user);
+        aToken.approve(address(adapter), uint256(type(uint128).max) - 1);
+
+        assertFalse(adapter.checkDelegation(user));
+    }
+
+    function test_checkDelegation_returnsTrueAtThreshold() public {
+        // Audit B20: boundary — allowance exactly at the threshold passes.
+        vm.prank(user);
+        aToken.approve(address(adapter), uint256(type(uint128).max));
+
+        assertTrue(adapter.checkDelegation(user));
     }
 
     function test_checkDelegation_returnsTrueWithMaxAllowance() public {

@@ -19,6 +19,7 @@ library SepehrErrors {
     error HealthFactorNotImproved(uint256 hfBefore, uint256 hfAfter);
     error ImplausibleHealthFactor(uint256 hf, uint256 floor);
     error DebtAssetMismatch(address expected, address provided);
+    error CollateralAssetMismatch(address expected, address provided);
 
     error SubscriptionExpired();
     error SubscriptionNotFound();

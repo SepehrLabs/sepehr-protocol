@@ -123,15 +123,21 @@ contract MorphoBlueAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B22: validate `collateralAsset` against the market's `collateralToken`.
+    ///      The adapter is bound to a single `MARKET_ID`, so any other token is a keeper bug
+    ///      or malicious input; reject before touching Morpho so the revert surfaces the mismatch.
     function withdrawCollateral(
         address user,
-        address,
+        address collateralAsset,
         uint256 amount,
         address recipient
     ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
         IMorpho.MarketParams memory params = MORPHO.idToMarketParams(MARKET_ID);
+        if (collateralAsset != params.collateralToken) {
+            revert SepehrErrors.CollateralAssetMismatch(params.collateralToken, collateralAsset);
+        }
         MORPHO.withdrawCollateral(params, amount, user, recipient);
     }
 

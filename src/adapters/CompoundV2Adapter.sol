@@ -61,10 +61,13 @@ contract CompoundV2Adapter is IProtocolAdapter, ReentrancyGuard {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B20: require an effectively-unlimited approval (>= 2**128) — dust approvals
+    ///      would pass `enableProtection` but the trigger's cToken `safeTransferFrom` would
+    ///      revert. Wallet "approve max" sets `type(uint256).max`, which is ≫ this threshold.
     function checkDelegation(
         address user
     ) external view returns (bool delegated) {
-        return IERC20(address(CTOKEN)).allowance(user, address(this)) > 0;
+        return IERC20(address(CTOKEN)).allowance(user, address(this)) >= type(uint128).max;
     }
 
     /// @inheritdoc IProtocolAdapter

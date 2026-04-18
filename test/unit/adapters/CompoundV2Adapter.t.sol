@@ -90,14 +90,22 @@ contract CompoundV2AdapterTest is Test {
 
     // ── checkDelegation ──────────────────────────────────────────────────
 
-    function test_checkDelegation_returnsTrueWhenAllowanceGiven() public {
+    function test_checkDelegation_returnsFalseWhenDustAllowance() public {
+        // Audit B20: dust approvals must not pass delegation.
         vm.prank(user);
         cToken.approve(address(adapter), 1);
-        assertTrue(adapter.checkDelegation(user));
+        assertFalse(adapter.checkDelegation(user));
     }
 
     function test_checkDelegation_returnsFalseWhenNoAllowance() public view {
         assertFalse(adapter.checkDelegation(user));
+    }
+
+    function test_checkDelegation_returnsTrueAtThreshold() public {
+        // Audit B20: boundary — allowance exactly at the threshold passes.
+        vm.prank(user);
+        cToken.approve(address(adapter), uint256(type(uint128).max));
+        assertTrue(adapter.checkDelegation(user));
     }
 
     function test_checkDelegation_returnsTrueWithMaxAllowance() public {

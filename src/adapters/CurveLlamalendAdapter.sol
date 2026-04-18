@@ -94,6 +94,11 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B21: the prior implementation transferred `balanceOf(this)` to the recipient,
+    ///      which would sweep any pre-existing donation sitting on the adapter into the trigger's
+    ///      caller. Snapshot the balance before `remove_collateral` and transfer only the delta
+    ///      pulled in by this call. This also makes the path robust to fee-on-transfer
+    ///      collateral tokens (the recipient receives whatever Curve actually paid out).
     function withdrawCollateral(
         address user,
         address,
@@ -102,14 +107,14 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
     ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
+        address collateralToken = CONTROLLER.collateral_token();
+        uint256 balanceBefore = IERC20(collateralToken).balanceOf(address(this));
         // remove_collateral is owner-only in Curve. The adapter calls it, and the
         // controller checks that msg.sender owns the position or is authorized.
         CONTROLLER.remove_collateral(amount);
-        // Transfer the withdrawn collateral to the recipient.
-        address collateralToken = CONTROLLER.collateral_token();
-        uint256 balance = IERC20(collateralToken).balanceOf(address(this));
-        if (balance > 0) {
-            IERC20(collateralToken).safeTransfer(recipient, balance);
+        uint256 received = IERC20(collateralToken).balanceOf(address(this)) - balanceBefore;
+        if (received > 0) {
+            IERC20(collateralToken).safeTransfer(recipient, received);
         }
     }
 

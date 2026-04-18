@@ -59,10 +59,12 @@ contract MoonwellAdapter is IProtocolAdapter, ReentrancyGuard {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B20: see CompoundV2Adapter — require an effectively-unlimited approval
+    ///      (>= 2**128) so dust approvals can't pass `enableProtection`.
     function checkDelegation(
         address user
     ) external view returns (bool delegated) {
-        return IERC20(address(MTOKEN)).allowance(user, address(this)) > 0;
+        return IERC20(address(MTOKEN)).allowance(user, address(this)) >= type(uint128).max;
     }
 
     /// @inheritdoc IProtocolAdapter

@@ -203,6 +203,20 @@ contract MorphoBlueAdapterTest is Test {
         assertEq(morpho.lastWithdrawReceiver(), recipient);
     }
 
+    function test_withdrawCollateral_revertsOnCollateralAssetMismatch() public {
+        // Audit B22: an asset that is not the market's collateralToken must revert
+        // before Morpho is called, so a buggy keeper doesn't silently pull nothing
+        // (or a future interface change doesn't stranded approvals on the wrong token).
+        MockERC20 wrong = new MockERC20("WRONG", "WRONG");
+        vm.prank(core);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SepehrErrors.CollateralAssetMismatch.selector, address(collateralToken), address(wrong)
+            )
+        );
+        adapter.withdrawCollateral(user, address(wrong), 1e18, recipient);
+    }
+
     // ── getCollateralValueUsd ────────────────────────────────────────────
 
     function test_getCollateralValueUsd_calculatesCorrectly() public {

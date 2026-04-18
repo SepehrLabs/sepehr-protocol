@@ -206,6 +206,22 @@ contract CurveLlamalendAdapterTest is Test {
         assertEq(collateralToken.balanceOf(address(adapter)), 0);
     }
 
+    function test_withdrawCollateral_doesNotSweepPreExistingDonation() public {
+        // Audit B21: a pre-existing donation on the adapter (from an errant transfer or a
+        // griefing depositor) must stay put — the function should only forward the delta
+        // pulled in by `remove_collateral`, never the adapter's full `balanceOf`.
+        uint256 donation = 3e18;
+        uint256 withdraw = 5e18;
+        collateralToken.mint(address(adapter), donation);
+        collateralToken.mint(address(controller), withdraw);
+
+        vm.prank(core);
+        adapter.withdrawCollateral(user, address(collateralToken), withdraw, recipient);
+
+        assertEq(collateralToken.balanceOf(recipient), withdraw, "recipient got exactly withdraw amount");
+        assertEq(collateralToken.balanceOf(address(adapter)), donation, "donation stays on the adapter");
+    }
+
     // ─── getCollateralValueUsd ─────────────────────────────────────────
 
     function test_getCollateralValueUsd_returnsZeroWhenBothZero() public {

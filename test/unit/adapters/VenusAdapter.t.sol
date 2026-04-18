@@ -74,10 +74,14 @@ contract VenusAdapterTest is Test {
         assertEq(adapter.getHealthFactor(user), type(uint256).max);
     }
 
-    function test_checkDelegation_reflectsAllowance() public {
+    function test_checkDelegation_rejectsDustAndAcceptsMax() public {
+        // Audit B20: dust approval rejected, "approve max" accepted.
         assertFalse(adapter.checkDelegation(user));
         vm.prank(user);
         vToken.approve(address(adapter), 1);
+        assertFalse(adapter.checkDelegation(user));
+        vm.prank(user);
+        vToken.approve(address(adapter), type(uint256).max);
         assertTrue(adapter.checkDelegation(user));
     }
 

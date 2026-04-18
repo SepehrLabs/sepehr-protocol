@@ -43,10 +43,15 @@ contract AaveV3Adapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Audit B20: require an effectively-unlimited approval (>= 2**128) rather than any
+    ///      non-zero allowance. A 1-wei dust approval was previously enough to pass
+    ///      `enableProtection`, but the subsequent trigger would revert in `safeTransferFrom`
+    ///      because the adapter pulls the user's entire aToken share. Standard wallet "approve
+    ///      max" sets `type(uint256).max`, which sits far above this threshold.
     function checkDelegation(
         address user
     ) external view returns (bool delegated) {
-        return IERC20(ATOKEN).allowance(user, address(this)) > 0;
+        return IERC20(ATOKEN).allowance(user, address(this)) >= type(uint128).max;
     }
 
     /// @inheritdoc IProtocolAdapter
