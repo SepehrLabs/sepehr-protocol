@@ -13,6 +13,7 @@ import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockDex} from "../../src/mocks/MockDex.sol";
 import {MockFlashLoan} from "../../src/mocks/MockFlashLoan.sol";
+import {MockChainlinkAggregator} from "../helpers/MockChainlinkAggregator.sol";
 
 contract MockERC20 is ERC20 {
     constructor(
@@ -810,6 +811,242 @@ contract SepehrCoreTriggersTest is Test {
             ""
         );
         assertEq(dex.lastRouteData(), canonical);
+    }
+
+    // ─── D2: oracle-derived minOut floor ──────────────────────────
+
+    /// @dev D2: when oracles are registered for both sides and the DEX returns less than
+    /// `expected * (1 - maxSlippageBps)`, the swap must revert. Here the collateral feed
+    /// prices the asset at 2x the debt feed, so oracle-expected out = 2 * collateralNeeded.
+    /// The MockDex returns 1:1 (deliberate under-execution), so the oracle floor fires.
+    function test_execute_oracleFloor_revertsOnDepressedSwap() public {
+        bytes32 seqKey = keccak256("SEQ_ORACLE_DEPRESSED");
+        _setupForSwap(seqKey);
+
+        MockChainlinkAggregator collAgg = new MockChainlinkAggregator(8, 2e8); // $2 per unit
+        MockChainlinkAggregator debtAgg = new MockChainlinkAggregator(8, 1e8); // $1 per unit
+
+        vm.startPrank(timelock);
+        core.setAssetOracle(address(collateralToken), address(collAgg), 1 hours);
+        core.setAssetOracle(address(debtToken), address(debtAgg), 1 hours);
+        vm.stopPrank();
+
+        address[] memory providers = _buildFlashProviders();
+        vm.prank(keeper);
+        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+    }
+
+    /// @dev Sanity path: with matched prices (1:1) and a 1:1 MockDex, the oracle floor
+    /// is below the solvency floor so execution succeeds — exercising that the oracle
+    /// branch does not accidentally block legitimate swaps.
+    function test_execute_oracleFloor_passesWhenSwapMatchesPrice() public {
+        bytes32 seqKey = keccak256("SEQ_ORACLE_OK");
+        _setupForSwap(seqKey);
+
+        MockChainlinkAggregator collAgg = new MockChainlinkAggregator(8, 1e8);
+        MockChainlinkAggregator debtAgg = new MockChainlinkAggregator(8, 1e8);
+
+        vm.startPrank(timelock);
+        core.setAssetOracle(address(collateralToken), address(collAgg), 1 hours);
+        core.setAssetOracle(address(debtToken), address(debtAgg), 1 hours);
+        vm.stopPrank();
+
+        address[] memory providers = _buildFlashProviders();
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+        assertEq(core.lastTriggerTime(alice), block.timestamp);
+    }
+
+    /// @dev Non-strict mode with oracles only partially registered must skip the floor
+    /// check entirely (so rollout can be phased without breaking triggers).
+    function test_execute_oracleFloor_skippedWhenOnlyOneSideRegistered() public {
+        bytes32 seqKey = keccak256("SEQ_ORACLE_PARTIAL");
+        _setupForSwap(seqKey);
+
+        MockChainlinkAggregator collAgg = new MockChainlinkAggregator(8, 2e8);
+
+        vm.prank(timelock);
+        core.setAssetOracle(address(collateralToken), address(collAgg), 1 hours);
+        // debtToken oracle deliberately left unregistered
+
+        address[] memory providers = _buildFlashProviders();
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+        assertEq(core.lastTriggerTime(alice), block.timestamp);
+    }
+
+    /// @dev Strict oracle pricing: a missing oracle for either side must block the
+    /// trigger outright. The inner `MissingAssetOracle` revert is wrapped by the
+    /// flash-loan try/catch into `NoFlashLoanAvailable`.
+    function test_execute_strictOracle_revertsWhenOracleMissing() public {
+        bytes32 seqKey = keccak256("SEQ_ORACLE_STRICT_MISSING");
+        _setupForSwap(seqKey);
+
+        vm.prank(timelock);
+        core.setStrictOraclePricing(true);
+
+        address[] memory providers = _buildFlashProviders();
+        vm.prank(keeper);
+        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+    }
+
+    /// @dev Same-asset triggers never reach the oracle branch (no swap), so strict
+    /// mode cannot block them.
+    function test_execute_strictOracle_doesNotRequireOracleWhenNoSwap() public {
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(alice, true);
+        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
+
+        bytes32 seqKey = keccak256("SEQ_ORACLE_STRICT_NOSWAP");
+        vm.prank(timelock);
+        core.addAdapter(seqKey, address(seqAdapter));
+
+        vm.prank(alice);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
+
+        vm.prank(timelock);
+        core.setStrictOraclePricing(true);
+
+        address[] memory providers = _buildFlashProviders();
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+        assertEq(core.lastTriggerTime(alice), block.timestamp);
+    }
+
+    /// @dev A stale oracle reading (updatedAt older than the configured staleness)
+    /// must revert via `StaleOraclePrice`, wrapped by the flash-loan try/catch.
+    function test_execute_oracleFloor_revertsOnStalePrice() public {
+        bytes32 seqKey = keccak256("SEQ_ORACLE_STALE");
+        _setupForSwap(seqKey);
+
+        MockChainlinkAggregator collAgg = new MockChainlinkAggregator(8, 1e8);
+        MockChainlinkAggregator debtAgg = new MockChainlinkAggregator(8, 1e8);
+
+        vm.startPrank(timelock);
+        core.setAssetOracle(address(collateralToken), address(collAgg), 30 minutes);
+        core.setAssetOracle(address(debtToken), address(debtAgg), 30 minutes);
+        vm.stopPrank();
+
+        // Make the collateral feed stale: push its updatedAt into the past, then warp forward
+        // beyond the 30-minute staleness window.
+        collAgg.setUpdatedAt(block.timestamp);
+        vm.warp(block.timestamp + 31 minutes);
+
+        address[] memory providers = _buildFlashProviders();
+        vm.prank(keeper);
+        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+    }
+
+    /// @dev Non-positive oracle answer (0 or negative) is a Chainlink "no valid round"
+    /// signal and must block the trigger rather than be coerced to uint256.
+    function test_execute_oracleFloor_revertsOnZeroAnswer() public {
+        bytes32 seqKey = keccak256("SEQ_ORACLE_ZERO");
+        _setupForSwap(seqKey);
+
+        MockChainlinkAggregator collAgg = new MockChainlinkAggregator(8, 1e8);
+        MockChainlinkAggregator debtAgg = new MockChainlinkAggregator(8, 0);
+
+        vm.startPrank(timelock);
+        core.setAssetOracle(address(collateralToken), address(collAgg), 1 hours);
+        core.setAssetOracle(address(debtToken), address(debtAgg), 1 hours);
+        vm.stopPrank();
+
+        address[] memory providers = _buildFlashProviders();
+        vm.prank(keeper);
+        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            REPAY_VALUE_USD6,
+            providers,
+            address(dex),
+            ""
+        );
+    }
+
+    /// @dev Internal helper — wires a fresh SequentialMockAdapter under `seqKey`,
+    /// enables alice's protection against it, and funds the DEX + adapter so a
+    /// collateral→debt swap is possible. Keeps each D2 test self-contained.
+    function _setupForSwap(
+        bytes32 seqKey
+    ) internal {
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(alice, true);
+
+        vm.prank(timelock);
+        core.addAdapter(seqKey, address(seqAdapter));
+
+        vm.prank(alice);
+        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
+
+        collateralToken.mint(address(seqAdapter), REPAY_AMOUNT * 2);
+        debtToken.mint(address(dex), REPAY_AMOUNT * 2);
     }
 
     /// @dev When collateralAsset == debtAsset (no swap), the canonical route

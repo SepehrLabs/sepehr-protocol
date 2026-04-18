@@ -59,6 +59,9 @@ library SepehrEvents {
     event CanonicalRouteSet(address indexed router, address indexed tokenIn, address indexed tokenOut, bytes data);
     event CanonicalRouteCleared(address indexed router, address indexed tokenIn, address indexed tokenOut);
     event StrictCanonicalRoutesUpdated(bool enabled);
+    event AssetOracleSet(address indexed asset, address indexed aggregator, uint256 maxStaleness);
+    event AssetOracleCleared(address indexed asset);
+    event StrictOraclePricingUpdated(bool enabled);
 
     // ─── Emergency ───────────────────────────────────────────────
     event EmergencyPaused(address indexed by, uint256 pausedUntil);

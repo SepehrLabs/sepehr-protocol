@@ -11,6 +11,7 @@ import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
 import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
 import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
+import {MockChainlinkAggregator} from "../helpers/MockChainlinkAggregator.sol";
 
 contract MockERC20 is ERC20 {
     constructor(
@@ -755,5 +756,135 @@ contract SepehrCoreAdminTest is Test {
         (bool setBA,) = core.getCanonicalRoute(router, b, a);
         assertTrue(setAB);
         assertFalse(setBA);
+    }
+
+    // ─── D2: asset oracle registry ──────────────────────────────
+
+    function test_setAssetOracle_storesAggregatorAndStaleness() public {
+        address asset = makeAddr("asset");
+        MockChainlinkAggregator agg = new MockChainlinkAggregator(8, 1e8);
+
+        vm.prank(timelock);
+        core.setAssetOracle(asset, address(agg), 1 hours);
+
+        (address storedAgg, uint256 storedStale) = _readAssetOracle(asset);
+        assertEq(storedAgg, address(agg));
+        assertEq(storedStale, 1 hours);
+    }
+
+    function test_setAssetOracle_emitsEvent() public {
+        address asset = makeAddr("asset");
+        MockChainlinkAggregator agg = new MockChainlinkAggregator(8, 1e8);
+
+        vm.expectEmit(true, true, false, true, address(core));
+        emit SepehrEvents.AssetOracleSet(asset, address(agg), 30 minutes);
+
+        vm.prank(timelock);
+        core.setAssetOracle(asset, address(agg), 30 minutes);
+    }
+
+    function test_setAssetOracle_revertsFromNonTimelock() public {
+        MockChainlinkAggregator agg = new MockChainlinkAggregator(8, 1e8);
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
+        core.setAssetOracle(makeAddr("asset"), address(agg), 1 hours);
+    }
+
+    function test_setAssetOracle_revertsOnZeroAsset() public {
+        MockChainlinkAggregator agg = new MockChainlinkAggregator(8, 1e8);
+        vm.prank(timelock);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        core.setAssetOracle(address(0), address(agg), 1 hours);
+    }
+
+    function test_setAssetOracle_revertsOnZeroAggregator() public {
+        vm.prank(timelock);
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        core.setAssetOracle(makeAddr("asset"), address(0), 1 hours);
+    }
+
+    function test_setAssetOracle_revertsOnZeroStaleness() public {
+        MockChainlinkAggregator agg = new MockChainlinkAggregator(8, 1e8);
+        vm.prank(timelock);
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.InvalidOracleStaleness.selector, uint256(0)));
+        core.setAssetOracle(makeAddr("asset"), address(agg), 0);
+    }
+
+    function test_setAssetOracle_revertsWhenStalenessAboveCap() public {
+        MockChainlinkAggregator agg = new MockChainlinkAggregator(8, 1e8);
+        uint256 tooStale = core.MAX_ORACLE_STALENESS() + 1;
+        vm.prank(timelock);
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.InvalidOracleStaleness.selector, tooStale));
+        core.setAssetOracle(makeAddr("asset"), address(agg), tooStale);
+    }
+
+    function test_setAssetOracle_revertsOnWrongDecimals() public {
+        MockChainlinkAggregator agg = new MockChainlinkAggregator(18, 1e18);
+        vm.prank(timelock);
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.InvalidOracleDecimals.selector, uint8(18), uint8(8)));
+        core.setAssetOracle(makeAddr("asset"), address(agg), 1 hours);
+    }
+
+    function test_clearAssetOracle_removesEntry() public {
+        address asset = makeAddr("asset");
+        MockChainlinkAggregator agg = new MockChainlinkAggregator(8, 1e8);
+
+        vm.prank(timelock);
+        core.setAssetOracle(asset, address(agg), 1 hours);
+
+        vm.prank(timelock);
+        core.clearAssetOracle(asset);
+
+        (address storedAgg, uint256 storedStale) = _readAssetOracle(asset);
+        assertEq(storedAgg, address(0));
+        assertEq(storedStale, 0);
+    }
+
+    function test_clearAssetOracle_emitsEvent() public {
+        address asset = makeAddr("asset");
+        vm.expectEmit(true, false, false, true, address(core));
+        emit SepehrEvents.AssetOracleCleared(asset);
+        vm.prank(timelock);
+        core.clearAssetOracle(asset);
+    }
+
+    function test_clearAssetOracle_revertsFromNonTimelock() public {
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
+        core.clearAssetOracle(makeAddr("asset"));
+    }
+
+    function test_setStrictOraclePricing_togglesFlag() public {
+        assertFalse(core.strictOraclePricing());
+        vm.prank(timelock);
+        core.setStrictOraclePricing(true);
+        assertTrue(core.strictOraclePricing());
+        vm.prank(timelock);
+        core.setStrictOraclePricing(false);
+        assertFalse(core.strictOraclePricing());
+    }
+
+    function test_setStrictOraclePricing_emitsEvent() public {
+        vm.expectEmit(false, false, false, true, address(core));
+        emit SepehrEvents.StrictOraclePricingUpdated(true);
+        vm.prank(timelock);
+        core.setStrictOraclePricing(true);
+    }
+
+    function test_setStrictOraclePricing_revertsFromNonTimelock() public {
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
+        core.setStrictOraclePricing(true);
+    }
+
+    function _readAssetOracle(
+        address asset
+    ) internal view returns (address agg, uint256 stale) {
+        (agg, stale) = _callAssetOracles(asset);
+    }
+
+    function _callAssetOracles(
+        address asset
+    ) internal view returns (address agg, uint256 stale) {
+        (bool ok, bytes memory ret) = address(core).staticcall(abi.encodeWithSignature("assetOracles(address)", asset));
+        require(ok, "assetOracles call failed");
+        (agg, stale) = abi.decode(ret, (address, uint256));
     }
 }

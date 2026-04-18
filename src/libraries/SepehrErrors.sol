@@ -47,6 +47,12 @@ library SepehrErrors {
     error SameToken();
     error InvalidRouteData();
 
+    error MissingAssetOracle(address asset);
+    error StaleOraclePrice(address asset, uint256 updatedAt, uint256 nowTs);
+    error InvalidOraclePrice(address asset, int256 answer);
+    error InvalidOracleStaleness(uint256 maxStaleness);
+    error InvalidOracleDecimals(uint8 actual, uint8 expected);
+
     error ProtectionNotEnabled(address user, bytes32 protocolKey);
     error ProtectionAlreadyEnabled(address user, bytes32 protocolKey);
 

@@ -2,15 +2,18 @@
 pragma solidity ^0.8.28;
 
 import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/interfaces/IERC20Metadata.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {IDexRouter} from "./interfaces/IDexRouter.sol";
 import {IFlashLoanProvider} from "./interfaces/IFlashLoanProvider.sol";
 import {IProtocolAdapter} from "./interfaces/IProtocolAdapter.sol";
 import {ISepehrCallback} from "./interfaces/ISepehrCallback.sol";
 import {ISepehrCore} from "./interfaces/ISepehrCore.sol";
+import {IChainlinkAggregator} from "./interfaces/external/IChainlinkAggregator.sol";
 import {HealthFactorMath} from "./libraries/HealthFactorMath.sol";
 import {Percentages} from "./libraries/Percentages.sol";
 import {SepehrErrors} from "./libraries/SepehrErrors.sol";
@@ -46,6 +49,19 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// `disableProtection` without waiting on a human. 7 days is long enough for a legitimate
     /// incident response (timelock + review) and short enough to avoid indefinite lockout.
     uint256 public constant MAX_PAUSE_DURATION = 7 days;
+
+    /// @notice D2: upper bound on the per-asset oracle staleness threshold. A timelock proposal
+    /// that registered a feed with a multi-week `maxStaleness` would effectively disable the
+    /// oracle-floor check (a long-dead feed would still be "fresh"). One day is the longest
+    /// heartbeat among Chainlink's mainstream USD feeds (stablecoin pairs), so capping at
+    /// 1 day rejects obviously-insecure configurations without breaking legitimate ones.
+    uint256 public constant MAX_ORACLE_STALENESS = 1 days;
+    /// @notice D2: required decimals for every registered Chainlink aggregator. Chainlink's
+    /// USD-denominated feeds are 8-decimal; enforcing this at registration time lets the
+    /// min-out math assume both sides of a swap price pair share the same scaling and skip
+    /// a `min`/`max`-decimal normalization step that would otherwise have to run inside the
+    /// flash-loan callback.
+    uint8 public constant ORACLE_PRICE_DECIMALS = 8;
 
     uint256[3] public TIER_PRICES_MONTHLY_USD_6 = [
         9_000_000, // Shield: $9/mo
@@ -105,6 +121,25 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// registry can be rolled out pair-by-pair without breaking triggers on already-
     /// live pairs; governance can flip the flag once the registry is populated.
     bool public strictCanonicalRoutes;
+
+    /// @notice D2: per-asset Chainlink-compatible price oracle registry. Drives the
+    /// oracle-derived `minOut` floor inside `onFlashLoan`: given an expected swap pair
+    /// (collateralAsset → debtAsset), the contract computes the USD-equivalent output
+    /// from registered feeds and requires the swap to return at least
+    /// `expected * (10_000 - maxSlippageBps) / 10_000`. Without this floor, a keeper
+    /// with mempool control could sandwich their own trigger up to the user's
+    /// `maxSlippageBps` because the `repayAmount + fee` floor only guards flash-loan
+    /// solvency, not fair pricing.
+    struct AssetOracle {
+        IChainlinkAggregator aggregator;
+        uint256 maxStaleness;
+    }
+
+    mapping(address asset => AssetOracle) public assetOracles;
+    /// @notice When `true`, swaps in `onFlashLoan` revert if either side of the pair
+    /// has no registered oracle. Defaults to `false` so the registry can be populated
+    /// pair-by-pair; governance flips the flag once every live pair is covered.
+    bool public strictOraclePricing;
 
     struct AdapterEntry {
         IProtocolAdapter adapter;
@@ -550,15 +585,11 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         adapter.withdrawCollateral(user, collateralAsset, collateralNeeded, address(this));
 
         if (collateralAsset != debtAsset) {
-            // H23: `minOut` is the exact amount needed to repay the flash loan. It is passed
-            // directly to the router so the router's own min-out check enforces the floor. The
-            // previous code computed `minOutWithSlippage = minOut - slippage`, passed that to
-            // the router, then re-asserted on the un-slipped `minOut` — double-deducting the
-            // slippage margin and making the user-supplied `maxSlippageBps` effectively
-            // unreachable. `maxSlippageBps` is silenced intentionally here; it is still
-            // validated in _validateProtectionParams (bounded by MAX_SLIPPAGE_BPS) so that an
-            // upcoming off-chain price-oracle check can consume it. See H23 in the audit.
-            maxSlippageBps;
+            // H23: `repayAmount + fee` is the solvency floor — the minimum owed to the flash-
+            // loan provider. D2 later tightens this with an oracle-derived floor that consumes
+            // `maxSlippageBps`. Keeping the solvency floor here is still required so trigger
+            // execution reverts on any keeper-supplied `repayAmount` that would leave the
+            // flash loan unrepaid even if the oracle path is disabled for this pair.
             uint256 minOut = repayAmount + fee;
 
             // D1/D4: if governance has registered a canonical route for this
@@ -573,6 +604,15 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
                     revert SepehrErrors.NoCanonicalRoute(dexRouter, collateralAsset, debtAsset);
                 }
             }
+
+            // D2: tighten `minOut` with an oracle-derived floor. The `repayAmount + fee`
+            // value above only protects the flash-loan contract from insolvency; without
+            // an independent price floor the keeper can still degrade execution up to the
+            // user's `maxSlippageBps` (3% in the worst case) via deliberate sandwiching.
+            // The oracle floor reprojects the actual collateral being sold through
+            // Chainlink prices and demands at least `expected * (1 - maxSlippageBps)`.
+            uint256 oracleFloor = _oracleMinOut(collateralAsset, debtAsset, collateralNeeded, maxSlippageBps);
+            if (oracleFloor > minOut) minOut = oracleFloor;
 
             IERC20(collateralAsset).safeIncreaseAllowance(dexRouter, collateralNeeded);
             uint256 received =
@@ -916,6 +956,111 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         address tokenOut
     ) private pure returns (bytes32) {
         return keccak256(abi.encode(router, tokenIn, tokenOut));
+    }
+
+    /// @notice D2: register a Chainlink-compatible price oracle for `asset`. Once both the
+    /// collateral and debt assets of a swap have an oracle registered, the trigger callback
+    /// requires the swap to return at least `expected * (1 - maxSlippageBps)` where
+    /// `expected` is projected through the two registered feeds.
+    /// @dev Timelock-gated. `maxStaleness` bounds `block.timestamp - updatedAt` at read time
+    /// and must be in `(0, MAX_ORACLE_STALENESS]` so a multi-month threshold cannot silently
+    /// disable the floor. Chainlink's mainstream USD feeds are 8-decimal; the call reverts if
+    /// the aggregator reports any other decimal count so the in-callback math does not need
+    /// to normalize.
+    function setAssetOracle(
+        address asset,
+        address aggregator,
+        uint256 maxStaleness
+    ) external onlyTimelock {
+        if (asset == address(0) || aggregator == address(0)) revert SepehrErrors.ZeroAddress();
+        if (maxStaleness == 0 || maxStaleness > MAX_ORACLE_STALENESS) {
+            revert SepehrErrors.InvalidOracleStaleness(maxStaleness);
+        }
+        uint8 dec = IChainlinkAggregator(aggregator).decimals();
+        if (dec != ORACLE_PRICE_DECIMALS) {
+            revert SepehrErrors.InvalidOracleDecimals(dec, ORACLE_PRICE_DECIMALS);
+        }
+        assetOracles[asset] = AssetOracle({aggregator: IChainlinkAggregator(aggregator), maxStaleness: maxStaleness});
+        emit SepehrEvents.AssetOracleSet(asset, aggregator, maxStaleness);
+    }
+
+    /// @notice Clear a previously registered asset oracle.
+    /// @dev Timelock-gated. After clearing, swaps involving `asset` fall back to the
+    /// flash-loan solvency floor only — unless `strictOraclePricing` is enabled, in which
+    /// case those swaps will revert with `MissingAssetOracle`.
+    function clearAssetOracle(
+        address asset
+    ) external onlyTimelock {
+        delete assetOracles[asset];
+        emit SepehrEvents.AssetOracleCleared(asset);
+    }
+
+    /// @notice Toggle strict mode for the oracle-floor check.
+    /// @dev Timelock-gated. When enabled, any swap whose collateral or debt asset lacks a
+    /// registered oracle reverts — eliminating the implicit "no oracle → no floor" relaxation
+    /// and forcing every live pair through the oracle check.
+    function setStrictOraclePricing(
+        bool enabled
+    ) external onlyTimelock {
+        strictOraclePricing = enabled;
+        emit SepehrEvents.StrictOraclePricingUpdated(enabled);
+    }
+
+    /// @notice D2: compute the oracle-derived minimum output for a `collateralAsset → debtAsset`
+    /// swap of `amountIn` collateral units, accounting for the user-supplied `maxSlippageBps`.
+    /// @dev Returns 0 when either side lacks a registered oracle and `strictOraclePricing`
+    /// is disabled — the caller then falls back to the flash-loan solvency floor only.
+    /// Reverts with `MissingAssetOracle` when strict mode is enabled and any side is missing,
+    /// with `StaleOraclePrice` when a feed's `updatedAt` is older than its configured
+    /// `maxStaleness`, and with `InvalidOraclePrice` on a zero or negative round answer.
+    ///
+    /// Math:
+    ///   expectedOut = amountIn * collPrice * 10^debtDecimals
+    ///                 / (10^collDecimals * debtPrice)
+    ///   minOut      = expectedOut * (10_000 - maxSlippageBps) / 10_000
+    ///
+    /// Price decimals cancel because `setAssetOracle` enforces `ORACLE_PRICE_DECIMALS` on
+    /// every registered feed. `Math.mulDiv` is used to avoid intermediate overflow at the
+    /// outer edges of the input space (large amountIn × large price).
+    function _oracleMinOut(
+        address collateralAsset,
+        address debtAsset,
+        uint256 amountIn,
+        uint256 maxSlippageBps
+    ) internal view returns (uint256) {
+        AssetOracle memory collOracle = assetOracles[collateralAsset];
+        AssetOracle memory debtOracle = assetOracles[debtAsset];
+        if (address(collOracle.aggregator) == address(0) || address(debtOracle.aggregator) == address(0)) {
+            if (strictOraclePricing) {
+                revert SepehrErrors.MissingAssetOracle(address(collOracle.aggregator) == address(0)
+                        ? collateralAsset
+                        : debtAsset);
+            }
+            return 0;
+        }
+
+        uint256 collPrice = _readOraclePrice(collateralAsset, collOracle);
+        uint256 debtPrice = _readOraclePrice(debtAsset, debtOracle);
+
+        uint256 collDec = IERC20Metadata(collateralAsset).decimals();
+        uint256 debtDec = IERC20Metadata(debtAsset).decimals();
+
+        // expectedOut = amountIn * collPrice / 10^collDec * 10^debtDec / debtPrice
+        uint256 expectedOut = Math.mulDiv(Math.mulDiv(amountIn, collPrice, 10 ** collDec), 10 ** debtDec, debtPrice);
+        if (maxSlippageBps == 0) return expectedOut;
+        return (expectedOut * (10_000 - maxSlippageBps)) / 10_000;
+    }
+
+    function _readOraclePrice(
+        address asset,
+        AssetOracle memory oracle
+    ) private view returns (uint256) {
+        (, int256 answer,, uint256 updatedAt,) = oracle.aggregator.latestRoundData();
+        if (answer <= 0) revert SepehrErrors.InvalidOraclePrice(asset, answer);
+        if (block.timestamp > updatedAt && block.timestamp - updatedAt > oracle.maxStaleness) {
+            revert SepehrErrors.StaleOraclePrice(asset, updatedAt, block.timestamp);
+        }
+        return uint256(answer);
     }
 
     /// @notice Rotate the pause-guardian role to a new address.
