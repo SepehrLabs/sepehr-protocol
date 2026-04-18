@@ -55,8 +55,10 @@ contract E2ELocalDeploy is Script {
 
         MockChainlinkAggregator ethOracle = new MockChainlinkAggregator(8, 300_000_000_000);
         MockChainlinkAggregator btcOracle = new MockChainlinkAggregator(8, 6_500_000_000_000);
+        MockChainlinkAggregator usdcOracle = new MockChainlinkAggregator(8, 100_000_000);
         console.log("MOCK_ETH_ORACLE", address(ethOracle));
         console.log("MOCK_BTC_ORACLE", address(btcOracle));
+        console.log("MOCK_USDC_ORACLE", address(usdcOracle));
 
         address aavePool = vm.envAddress("AAVE_POOL");
         address aToken = vm.envAddress("AAVE_ATOKEN");
@@ -153,7 +155,7 @@ contract E2ELocalDeploy is Script {
             timelock,
             address(core),
             abi.encodeWithSignature(
-                "setAssetOracle(address,address,uint256)", usdc, address(btcOracle), uint256(86_400)
+                "setAssetOracle(address,address,uint256)", usdc, address(usdcOracle), uint256(86_400)
             )
         );
 

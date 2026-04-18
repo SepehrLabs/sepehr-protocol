@@ -44,4 +44,34 @@ contract MockAavePool {
 
         IERC20(asset).transferFrom(receiverAddress, address(this), amount + premium);
     }
+
+    /// @notice Mirrors `IAavePool.getReserveData` enough for `AaveFlashLoanProvider.isAvailable`
+    ///         to locate the aToken. The mock pool itself holds the underlying liquidity (see
+    ///         `flashLoanSimple`), so we report the pool as the aToken — matching the real
+    ///         accounting invariant that the aToken holds the asset.
+    function getReserveData(
+        address
+    )
+        external
+        view
+        returns (
+            uint256,
+            uint128,
+            uint128,
+            uint128,
+            uint128,
+            uint128,
+            uint40,
+            uint16,
+            address,
+            address,
+            address,
+            address,
+            uint128,
+            uint128,
+            uint128
+        )
+    {
+        return (0, 0, 0, 0, 0, 0, 0, 0, address(this), address(0), address(0), address(0), 0, 0, 0);
+    }
 }

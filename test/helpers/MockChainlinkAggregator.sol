@@ -42,4 +42,11 @@ contract MockChainlinkAggregator is IChainlinkAggregator {
     function latestRoundData() external view override returns (uint80, int256, uint256, uint256, uint80) {
         return (roundId, answer, updatedAt, updatedAt, roundId);
     }
+
+    /// @notice Chainlink V2 `AggregatorInterface.latestAnswer`. Aave V3's `AaveOracle`
+    ///         reads prices via this legacy entrypoint, so the mock must expose it for
+    ///         fork-mode E2E where we hijack `assetsSources` to point at this contract.
+    function latestAnswer() external view returns (int256) {
+        return answer;
+    }
 }

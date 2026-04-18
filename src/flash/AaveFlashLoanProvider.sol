@@ -115,10 +115,19 @@ contract AaveFlashLoanProvider is IFlashLoanProvider, Ownable2Step, ReentrancyGu
     }
 
     /// @inheritdoc IFlashLoanProvider
+    /// @dev Aave V3 stores the underlying liquidity in the aToken contract, not the Pool.
+    ///      Checking `balanceOf(POOL)` therefore returns near-zero and would suppress every
+    ///      flash loan (even a 1-wei request), causing `_borrowFlashLoan` to fall through
+    ///      to `NoFlashLoanAvailable()`. Resolve the reserve's aToken once and check its
+    ///      underlying balance; if the asset is not listed the returned `aTokenAddress`
+    ///      is `address(0)`, which makes the balance read revert — we catch that and
+    ///      report unavailable.
     function isAvailable(
         address asset,
         uint256 amount
     ) external view override returns (bool) {
-        return IERC20(asset).balanceOf(address(POOL)) >= amount;
+        (,,,,,,,, address aTokenAddress,,,,,,) = POOL.getReserveData(asset);
+        if (aTokenAddress == address(0)) return false;
+        return IERC20(asset).balanceOf(aTokenAddress) >= amount;
     }
 }
