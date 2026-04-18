@@ -4,7 +4,9 @@ pragma solidity ^0.8.28;
 import {UniV2ForkRouter} from "../../../src/dex/UniV2ForkRouter.sol";
 import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
+import {MockPartialPullRouter} from "../../helpers/MockPartialPullRouter.sol";
 import {MockV2Router} from "../../helpers/MockV2Router.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract UniV2ForkRouterTest is Test {
@@ -86,5 +88,54 @@ contract UniV2ForkRouterTest is Test {
 
         uint256 amountOut = router.swap(address(tokenIn), address(tokenOut), amount, 0, "");
         assertEq(amountOut, amount);
+    }
+
+    // ── D5: allowance reset + dust sweep ────────────────────────────────
+
+    function test_swap_resetsAllowance() public {
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, "");
+        assertEq(IERC20(address(tokenIn)).allowance(address(router), address(externalRouter)), 0);
+    }
+
+    function test_swap_sweepsPreSeededDust() public {
+        // Seed dust directly on the Sepehr router before the swap (simulates
+        // residual balance from a prior misbehaving swap).
+        uint256 dust = 7e18;
+        tokenIn.mint(address(router), dust);
+
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        uint256 callerBefore = tokenIn.balanceOf(address(this));
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, "");
+
+        assertEq(tokenIn.balanceOf(address(router)), 0, "dust left behind in router");
+        // Caller paid SWAP_AMOUNT to router, got `dust` back via sweep.
+        assertEq(tokenIn.balanceOf(address(this)), callerBefore - SWAP_AMOUNT + dust, "dust not swept to caller");
+    }
+
+    function test_swap_sweepsDustFromPartialPullRouter() public {
+        // Swap through a fee-on-transfer–style external router that pulls only
+        // 90% of amountIn, leaving 10% dust inside the Sepehr wrapper.
+        MockPartialPullRouter fotExt = new MockPartialPullRouter();
+        fotExt.setPullRatio(0.9e18);
+        tokenOut.mint(address(fotExt), 1_000_000e18);
+
+        UniV2ForkRouter fotWrapper = new UniV2ForkRouter(address(fotExt));
+
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(fotWrapper), SWAP_AMOUNT);
+
+        uint256 callerBefore = tokenIn.balanceOf(address(this));
+        uint256 amountOut = fotWrapper.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, "");
+
+        uint256 expectedDust = SWAP_AMOUNT - (SWAP_AMOUNT * 9 / 10);
+        assertEq(amountOut, (SWAP_AMOUNT * 9) / 10, "amountOut scales with pull ratio");
+        assertEq(tokenIn.balanceOf(address(fotWrapper)), 0, "dust left behind in router");
+        assertEq(tokenIn.balanceOf(address(this)), callerBefore - SWAP_AMOUNT + expectedDust, "dust not swept");
+        assertEq(IERC20(address(tokenIn)).allowance(address(fotWrapper), address(fotExt)), 0, "allowance not reset");
     }
 }

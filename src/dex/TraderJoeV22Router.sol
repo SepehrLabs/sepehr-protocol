@@ -57,6 +57,11 @@ contract TraderJoeV22Router is IDexRouter {
             ILBRouter.Path({pairBinSteps: pairBinSteps, versions: versions, tokenPath: tokenPath});
 
         amountOut = ROUTER.swapExactTokensForTokens(amountIn, minAmountOut, path, msg.sender, block.timestamp);
+
+        // D5: zero the external-router allowance and sweep any residual `tokenIn`.
+        IERC20(tokenIn).forceApprove(address(ROUTER), 0);
+        uint256 dust = IERC20(tokenIn).balanceOf(address(this));
+        if (dust > 0) IERC20(tokenIn).safeTransfer(msg.sender, dust);
     }
 
     /// @inheritdoc IDexRouter

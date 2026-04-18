@@ -5,6 +5,7 @@ import {CamelotRouter} from "../../../src/dex/CamelotRouter.sol";
 import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
 import {MockCamelotExtRouter} from "../../helpers/MockCamelotExtRouter.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract CamelotRouterTest is Test {
@@ -84,5 +85,29 @@ contract CamelotRouterTest is Test {
 
         uint256 amountOut = router.swap(address(tokenIn), address(tokenOut), amount, 0, "");
         assertEq(amountOut, amount);
+    }
+
+    // ── D5: allowance reset + dust sweep ────────────────────────────────
+
+    function test_swap_resetsAllowance() public {
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, "");
+        assertEq(IERC20(address(tokenIn)).allowance(address(router), address(externalRouter)), 0);
+    }
+
+    function test_swap_sweepsPreSeededDust() public {
+        uint256 dust = 7e18;
+        tokenIn.mint(address(router), dust);
+
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+
+        uint256 callerBefore = tokenIn.balanceOf(address(this));
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, "");
+
+        assertEq(tokenIn.balanceOf(address(router)), 0, "dust left behind in router");
+        assertEq(tokenIn.balanceOf(address(this)), callerBefore - SWAP_AMOUNT + dust, "dust not swept to caller");
     }
 }

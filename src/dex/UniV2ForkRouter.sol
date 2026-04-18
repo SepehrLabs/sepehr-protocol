@@ -42,6 +42,13 @@ contract UniV2ForkRouter is IDexRouter {
         uint256[] memory amounts =
             ROUTER.swapExactTokensForTokens(amountIn, minAmountOut, path, msg.sender, block.timestamp);
         amountOut = amounts[amounts.length - 1];
+
+        // D5: zero the external-router allowance and sweep any residual `tokenIn` back
+        // to the caller (fee-on-transfer / rebase tokens can leave dust if the external
+        // router pulled less than `amountIn`).
+        IERC20(tokenIn).forceApprove(address(ROUTER), 0);
+        uint256 dust = IERC20(tokenIn).balanceOf(address(this));
+        if (dust > 0) IERC20(tokenIn).safeTransfer(msg.sender, dust);
     }
 
     /// @inheritdoc IDexRouter

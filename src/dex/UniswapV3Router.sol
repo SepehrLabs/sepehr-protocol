@@ -72,6 +72,15 @@ contract UniswapV3Router is IDexRouter {
                 sqrtPriceLimitX96: sqrtPriceLimitX96
             })
         );
+
+        // D5: zero the external-router allowance and sweep any residual `tokenIn` back to
+        // the caller. Required because (a) a buggy/malicious SwapRouter could leave a
+        // non-zero allowance in place, letting it pull more on a future call, and (b)
+        // fee-on-transfer or rebase tokens can leave dust here when the external router
+        // pulls less than `amountIn`.
+        IERC20(tokenIn).forceApprove(address(SWAP_ROUTER), 0);
+        uint256 dust = IERC20(tokenIn).balanceOf(address(this));
+        if (dust > 0) IERC20(tokenIn).safeTransfer(msg.sender, dust);
     }
 
     /// @inheritdoc IDexRouter
