@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {Script, console} from "forge-std/Script.sol";
 
 import {SepehrCore} from "../src/SepehrCore.sol";
-import {SepehrTimelock} from "../src/SepehrTimelock.sol";
 import {AaveV3Adapter} from "../src/adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../src/adapters/CompoundV3Adapter.sol";
 import {UniswapV3Router} from "../src/dex/UniswapV3Router.sol";
@@ -48,7 +48,7 @@ contract E2ELocalDeploy is Script {
         proposers[0] = deployer;
         address[] memory executors = new address[](1);
         executors[0] = deployer;
-        SepehrTimelock timelock = new SepehrTimelock(0, proposers, executors, address(0));
+        TimelockController timelock = new TimelockController(0, proposers, executors, address(0));
         SepehrCore core = new SepehrCore(deployer, address(timelock), deployer, usdc, 0);
         console.log("TIMELOCK", address(timelock));
         console.log("CORE", address(core));
@@ -162,7 +162,7 @@ contract E2ELocalDeploy is Script {
 
     function _tlExec(
         address sender,
-        SepehrTimelock tl,
+        TimelockController tl,
         address target,
         bytes memory data
     ) internal {
