@@ -16,6 +16,9 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 /// @dev C7: `uniswapV3FlashCallback` uses `nonReentrant` as defense-in-depth on top
 ///      of the msg.sender check — a compromised Pool cannot cause re-entrant dispatch
 ///      into Sepehr callbacks via this provider.
+///      C9: callback, userData, asset and amount travel through the Pool's `data` bytes
+///      rather than persistent storage. A transient `_active` flag (EIP-1153) enforces
+///      the ConcurrentFlashLoan guard without touching a real storage slot.
 ///      C10: owner-only `sweep` recovers tokens accidentally donated to the provider;
 ///      blocked while a flash loan is in flight.
 contract UniswapV3FlashLoanProvider is IFlashLoanProvider, Ownable2Step, ReentrancyGuard {
@@ -23,10 +26,7 @@ contract UniswapV3FlashLoanProvider is IFlashLoanProvider, Ownable2Step, Reentra
 
     IUniswapV3Pool public immutable POOL;
 
-    address private _activeCallback;
-    address private _activeAsset;
-    uint256 private _activeAmount;
-    bytes private _activeData;
+    bool private transient _active;
 
     constructor(
         address pool,
@@ -46,7 +46,7 @@ contract UniswapV3FlashLoanProvider is IFlashLoanProvider, Ownable2Step, Reentra
         address to
     ) external onlyOwner {
         if (to == address(0)) revert SepehrErrors.ZeroAddress();
-        if (_activeCallback != address(0)) revert SepehrErrors.ConcurrentFlashLoan();
+        if (_active) revert SepehrErrors.ConcurrentFlashLoan();
         uint256 bal = IERC20(token).balanceOf(address(this));
         if (bal == 0) return;
         IERC20(token).safeTransfer(to, bal);
@@ -61,7 +61,7 @@ contract UniswapV3FlashLoanProvider is IFlashLoanProvider, Ownable2Step, Reentra
     ) external override {
         if (callback == address(0)) revert SepehrErrors.ZeroAddress();
         if (amount == 0) revert SepehrErrors.ZeroAmount();
-        if (_activeCallback != address(0)) revert SepehrErrors.ConcurrentFlashLoan();
+        if (_active) revert SepehrErrors.ConcurrentFlashLoan();
 
         address t0 = POOL.token0();
         address t1 = POOL.token1();
@@ -69,38 +69,40 @@ contract UniswapV3FlashLoanProvider is IFlashLoanProvider, Ownable2Step, Reentra
         bool isToken1 = asset == t1;
         if (!isToken0 && !isToken1) revert SepehrErrors.NoFlashLoanAvailable();
 
-        _activeCallback = callback;
-        _activeAsset = asset;
-        _activeAmount = amount;
-        _activeData = data;
+        _active = true;
+
+        // C9: encode (callback, userData, asset, amount) into the Pool's data bytes.
+        // Uniswap V3's callback only receives fee0/fee1, so the borrowed asset and amount
+        // must be carried through the params rather than stored on this provider.
+        bytes memory params = abi.encode(callback, data, asset, amount);
 
         uint256 amount0 = isToken0 ? amount : 0;
         uint256 amount1 = isToken1 ? amount : 0;
-        POOL.flash(address(this), amount0, amount1, "");
+        POOL.flash(address(this), amount0, amount1, params);
 
-        _activeCallback = address(0);
-        _activeAsset = address(0);
-        _activeAmount = 0;
-        delete _activeData;
+        _active = false;
     }
 
     /// @notice Uniswap V3 flash callback invoked by the pool after transferring tokens.
     /// @param fee0 The fee owed for token0.
     /// @param fee1 The fee owed for token1.
+    /// @param data The abi-encoded `(address callback, bytes userData, address asset, uint256 amount)`
+    ///             tuple produced by `flashBorrow`.
     function uniswapV3FlashCallback(
         uint256 fee0,
         uint256 fee1,
-        bytes calldata
+        bytes calldata data
     ) external nonReentrant {
         if (msg.sender != address(POOL)) revert SepehrErrors.InvalidFlashLoanCallback();
-        if (_activeCallback == address(0)) revert SepehrErrors.InvalidFlashLoanCallback();
+        if (!_active) revert SepehrErrors.InvalidFlashLoanCallback();
 
-        address asset = _activeAsset;
-        uint256 amount = _activeAmount;
+        (address callback, bytes memory userData, address asset, uint256 amount) =
+            abi.decode(data, (address, bytes, address, uint256));
+
         uint256 fee = asset == POOL.token0() ? fee0 : fee1;
 
-        IERC20(asset).safeTransfer(_activeCallback, amount);
-        ISepehrCallback(_activeCallback).onFlashLoan(asset, amount, fee, _activeData);
+        IERC20(asset).safeTransfer(callback, amount);
+        ISepehrCallback(callback).onFlashLoan(asset, amount, fee, userData);
 
         IERC20(asset).safeTransfer(address(POOL), amount + fee);
     }

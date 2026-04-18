@@ -151,6 +151,20 @@ contract AaveFlashLoanProviderTest is Test {
         provider.flashBorrow(address(token), BORROW_AMOUNT, address(callback), "");
     }
 
+    // C9: per-invocation context (callback + userData) must survive a round-trip
+    // through the Pool's `params` bytes. If the provider reverted to reading from
+    // storage, an adversarial Pool could zero the slot mid-callback and misroute
+    // or corrupt the onFlashLoan dispatch. This test just proves the userData bytes
+    // are delivered verbatim to the callback — the concurrent-invocation test above
+    // covers the transient `_active` guard.
+    function test_flashBorrow_forwardsLargeUserDataVerbatim() public {
+        uint256 fee = (BORROW_AMOUNT * pool.premiumTotal()) / 10_000;
+        token.mint(address(callback), fee);
+        bytes memory payload = hex"deadbeefcafebabefeedfacebeefcafebabefeedface0102030405060708090a0b0c0d0e0f10";
+        provider.flashBorrow(address(token), BORROW_AMOUNT, address(callback), payload);
+        assertEq(callback.lastData(), payload);
+    }
+
     // ── C10: sweep ───────────────────────────────────────────────────────
 
     function test_sweep_ownerRecoversDonatedTokens() public {

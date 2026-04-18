@@ -176,6 +176,16 @@ contract UniswapV3FlashLoanProviderTest is Test {
         provider.flashBorrow(address(tokenA), BORROW_AMOUNT, address(callback), "");
     }
 
+    // C9: per-invocation context (callback, userData, asset, amount) must survive a
+    // round-trip through the Pool's `data` bytes instead of provider storage.
+    function test_flashBorrow_forwardsLargeUserDataVerbatim() public {
+        uint256 expectedFee = (BORROW_AMOUNT * POOL_FEE) / 1_000_000;
+        tokenA.mint(address(callback), expectedFee);
+        bytes memory payload = hex"deadbeefcafebabefeedfacebeefcafebabefeedface0102030405060708090a0b0c0d0e0f10";
+        provider.flashBorrow(address(tokenA), BORROW_AMOUNT, address(callback), payload);
+        assertEq(callback.lastData(), payload);
+    }
+
     // ── isAvailable ──────────────────────────────────────────────────────
 
     function test_isAvailable_trueForToken0WithEnoughBalance() public view {

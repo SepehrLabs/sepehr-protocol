@@ -166,6 +166,14 @@ contract BalancerFlashLoanProviderTest is Test {
         provider.flashBorrow(address(token), BORROW_AMOUNT, address(callback), "");
     }
 
+    // C9: per-invocation context (callback + userData) must survive a round-trip
+    // through the Vault's `userData` bytes instead of provider storage.
+    function test_flashBorrow_forwardsLargeUserDataVerbatim() public {
+        bytes memory payload = hex"deadbeefcafebabefeedfacebeefcafebabefeedface0102030405060708090a0b0c0d0e0f10";
+        provider.flashBorrow(address(token), BORROW_AMOUNT, address(callback), payload);
+        assertEq(callback.lastData(), payload);
+    }
+
     // ── isAvailable ──────────────────────────────────────────────────────
 
     function test_isAvailable_trueWhenEnoughLiquidity() public view {

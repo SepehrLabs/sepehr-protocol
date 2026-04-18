@@ -15,6 +15,9 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 /// @dev C7: `executeOperation` uses `nonReentrant` as defense-in-depth on top of
 ///      the msg.sender/initiator checks — a compromised Pool cannot cause re-entrant
 ///      dispatch into Sepehr callbacks via this provider.
+///      C9: callback + userData travel through the Pool's `params` bytes rather than
+///      persistent storage. A transient `_active` flag (EIP-1153) enforces the
+///      ConcurrentFlashLoan guard without touching a real storage slot.
 ///      C10: owner-only `sweep` recovers tokens accidentally donated to the provider;
 ///      blocked while a flash loan is in flight so the owner cannot siphon the
 ///      principal/fee mid-callback.
@@ -23,8 +26,7 @@ contract AaveFlashLoanProvider is IFlashLoanProvider, Ownable2Step, ReentrancyGu
 
     IAavePool public immutable POOL;
 
-    address private _activeCallback;
-    bytes private _activeData;
+    bool private transient _active;
 
     constructor(
         address pool,
@@ -36,8 +38,8 @@ contract AaveFlashLoanProvider is IFlashLoanProvider, Ownable2Step, ReentrancyGu
 
     /// @notice Sweep a non-essential token balance to `to`.
     /// @dev C10: guards against accidentally-donated tokens being permanently locked.
-    ///      Blocked while `_activeCallback != address(0)` so an (already trusted) owner
-    ///      still cannot race a live flash loan and take the principal.
+    ///      Blocked while `_active` is set so an (already trusted) owner still cannot
+    ///      race a live flash loan and take the principal.
     /// @param token The ERC20 to sweep.
     /// @param to The recipient.
     function sweep(
@@ -45,7 +47,7 @@ contract AaveFlashLoanProvider is IFlashLoanProvider, Ownable2Step, ReentrancyGu
         address to
     ) external onlyOwner {
         if (to == address(0)) revert SepehrErrors.ZeroAddress();
-        if (_activeCallback != address(0)) revert SepehrErrors.ConcurrentFlashLoan();
+        if (_active) revert SepehrErrors.ConcurrentFlashLoan();
         uint256 bal = IERC20(token).balanceOf(address(this));
         if (bal == 0) return;
         IERC20(token).safeTransfer(to, bal);
@@ -60,12 +62,15 @@ contract AaveFlashLoanProvider is IFlashLoanProvider, Ownable2Step, ReentrancyGu
     ) external override {
         if (callback == address(0)) revert SepehrErrors.ZeroAddress();
         if (amount == 0) revert SepehrErrors.ZeroAmount();
-        if (_activeCallback != address(0)) revert SepehrErrors.ConcurrentFlashLoan();
+        if (_active) revert SepehrErrors.ConcurrentFlashLoan();
 
-        _activeCallback = callback;
-        _activeData = data;
+        _active = true;
 
-        POOL.flashLoanSimple(address(this), asset, amount, "", 0);
+        // C9: encode (callback, userData) into the Pool's params bytes so the callback
+        // address and blob are delivered verbatim by Aave rather than stored on this
+        // provider. Persistent storage for per-invocation context is removed.
+        bytes memory params = abi.encode(callback, data);
+        POOL.flashLoanSimple(address(this), asset, amount, params, 0);
 
         // C8: explicitly zero the Pool's allowance after repayment. On standard ERC20s Aave's
         // `transferFrom` already decrements allowance to 0, but non-standard tokens (USDT-like
@@ -73,8 +78,7 @@ contract AaveFlashLoanProvider is IFlashLoanProvider, Ownable2Step, ReentrancyGu
         // silently raise the next call's effective allowance.
         IERC20(asset).forceApprove(address(POOL), 0);
 
-        _activeCallback = address(0);
-        delete _activeData;
+        _active = false;
     }
 
     /// @notice Aave V3 callback invoked by the Pool after transferring borrowed tokens.
@@ -82,19 +86,22 @@ contract AaveFlashLoanProvider is IFlashLoanProvider, Ownable2Step, ReentrancyGu
     /// @param amount The borrowed amount.
     /// @param premium The fee owed on top of the principal.
     /// @param initiator The address that initiated the flash loan (must be this contract).
+    /// @param params The abi-encoded `(address callback, bytes userData)` tuple produced by `flashBorrow`.
     function executeOperation(
         address asset,
         uint256 amount,
         uint256 premium,
         address initiator,
-        bytes calldata
+        bytes calldata params
     ) external nonReentrant returns (bool) {
         if (msg.sender != address(POOL)) revert SepehrErrors.InvalidFlashLoanCallback();
         if (initiator != address(this)) revert SepehrErrors.InvalidFlashLoanCallback();
-        if (_activeCallback == address(0)) revert SepehrErrors.InvalidFlashLoanCallback();
+        if (!_active) revert SepehrErrors.InvalidFlashLoanCallback();
 
-        IERC20(asset).safeTransfer(_activeCallback, amount);
-        ISepehrCallback(_activeCallback).onFlashLoan(asset, amount, premium, _activeData);
+        (address callback, bytes memory userData) = abi.decode(params, (address, bytes));
+
+        IERC20(asset).safeTransfer(callback, amount);
+        ISepehrCallback(callback).onFlashLoan(asset, amount, premium, userData);
 
         IERC20(asset).forceApprove(address(POOL), amount + premium);
         return true;
