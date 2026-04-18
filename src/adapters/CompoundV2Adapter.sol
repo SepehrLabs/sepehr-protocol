@@ -36,13 +36,21 @@ contract CompoundV2Adapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Compound V2's Comptroller returns (0, 0, 0) for both zero-debt and
+    ///      perfectly-balanced accounts. Only the latter is at liquidation
+    ///      risk, so we disambiguate by summing borrows across all markets the
+    ///      user has entered. Pure zero-debt returns max — otherwise 1e18.
     function getHealthFactor(
         address user
     ) external view returns (uint256) {
         (, uint256 liquidity, uint256 shortfall) = COMPTROLLER.getAccountLiquidity(user);
         if (shortfall > 0) return 0;
         if (liquidity > 0) return type(uint256).max;
-        return 1e18;
+        address[] memory assets = COMPTROLLER.getAssetsIn(user);
+        for (uint256 i = 0; i < assets.length; ++i) {
+            if (ICToken(assets[i]).borrowBalanceStored(user) > 0) return 1e18;
+        }
+        return type(uint256).max;
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -82,15 +90,26 @@ contract CompoundV2Adapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Sums value across all cTokens the user has entered, not just the
+    ///      constructor-wired CTOKEN. Querying a single cToken would let users
+    ///      evade tier caps by parking collateral in other Compound markets.
+    ///      Compound V2 oracle returns 1e(36 - underlyingDecimals) so
+    ///      `underlyingBalance * price / 1e18` yields USD-18 scaled by the
+    ///      decimal normalization built into the oracle.
     function getCollateralValueUsd(
         address user
     ) external view returns (uint256 usdValue) {
         ICompoundOracle oracle = ICompoundOracle(COMPTROLLER.oracle());
-        uint256 price = oracle.getUnderlyingPrice(address(CTOKEN));
-        uint256 cTokenBalance = CTOKEN.balanceOf(user);
-        uint256 exchangeRate = CTOKEN.exchangeRateStored();
-        uint256 underlyingBalance = cTokenBalance * exchangeRate / 1e18;
-        usdValue = underlyingBalance * price / 1e18;
+        address[] memory assets = COMPTROLLER.getAssetsIn(user);
+        for (uint256 i = 0; i < assets.length; ++i) {
+            ICToken market = ICToken(assets[i]);
+            uint256 cTokenBalance = market.balanceOf(user);
+            if (cTokenBalance == 0) continue;
+            uint256 exchangeRate = market.exchangeRateStored();
+            uint256 price = oracle.getUnderlyingPrice(assets[i]);
+            uint256 underlyingBalance = cTokenBalance * exchangeRate / 1e18;
+            usdValue += underlyingBalance * price / 1e18;
+        }
     }
 
     /// @inheritdoc IProtocolAdapter

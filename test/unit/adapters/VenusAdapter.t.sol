@@ -25,6 +25,10 @@ contract VenusAdapterTest is Test {
         comptroller.setOracle(address(oracle));
         vToken = new MockCToken("vBUSD", "vBUSD", address(underlying));
         adapter = new VenusAdapter(address(comptroller), address(vToken), core);
+
+        address[] memory assets = new address[](1);
+        assets[0] = address(vToken);
+        comptroller.setAssetsIn(user, assets);
     }
 
     function test_constructor_storesComptrollerAndVToken() public view {
@@ -59,8 +63,15 @@ contract VenusAdapterTest is Test {
     }
 
     function test_getHealthFactor_balancedReturnsOne() public {
+        // Fix for B8: distinguish zero-debt (returns max) from balanced-debt.
         comptroller.setAccountLiquidity(user, 0, 0, 0);
+        vToken.setBorrowBalance(user, 1);
         assertEq(adapter.getHealthFactor(user), 1e18);
+    }
+
+    function test_getHealthFactor_zeroDebtReturnsMax() public {
+        comptroller.setAccountLiquidity(user, 0, 0, 0);
+        assertEq(adapter.getHealthFactor(user), type(uint256).max);
     }
 
     function test_checkDelegation_reflectsAllowance() public {
@@ -140,16 +151,20 @@ contract VenusAdapterTest is Test {
 
     function testFuzz_getHealthFactor_classifiesCorrectly(
         uint128 liquidity,
-        uint128 shortfall
+        uint128 shortfall,
+        uint128 debt
     ) public {
         comptroller.setAccountLiquidity(user, 0, liquidity, shortfall);
+        vToken.setBorrowBalance(user, debt);
         uint256 hf = adapter.getHealthFactor(user);
         if (shortfall > 0) {
             assertEq(hf, 0);
         } else if (liquidity > 0) {
             assertEq(hf, type(uint256).max);
-        } else {
+        } else if (debt > 0) {
             assertEq(hf, 1e18);
+        } else {
+            assertEq(hf, type(uint256).max);
         }
     }
 }

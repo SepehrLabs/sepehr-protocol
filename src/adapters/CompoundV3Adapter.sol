@@ -18,6 +18,10 @@ contract CompoundV3Adapter is IProtocolAdapter {
     using SafeERC20 for IERC20;
 
     IComet public immutable COMET;
+    /// @dev Base-token unit scale cached at construction (10 ** baseDecimals).
+    ///      USDC Comets are 1e6, cWETHv3 is 1e18, etc. Hardcoding 1e6 was wrong
+    ///      for every non-USDC market (audit B11).
+    uint256 public immutable BASE_SCALE;
     address public immutable core;
 
     modifier onlyCore() {
@@ -32,6 +36,7 @@ contract CompoundV3Adapter is IProtocolAdapter {
         if (comet == address(0)) revert SepehrErrors.ZeroAddress();
         if (_core == address(0)) revert SepehrErrors.ZeroAddress();
         COMET = IComet(comet);
+        BASE_SCALE = IComet(comet).baseScale();
         core = _core;
     }
 
@@ -54,7 +59,7 @@ contract CompoundV3Adapter is IProtocolAdapter {
         }
 
         uint256 basePrice = COMET.getPrice(COMET.baseTokenPriceFeed());
-        uint256 borrowValueUsd = borrowBalance * basePrice / 1e6;
+        uint256 borrowValueUsd = borrowBalance * basePrice / BASE_SCALE;
 
         if (borrowValueUsd == 0) return type(uint256).max;
         return totalCollateralValue * 1e18 / borrowValueUsd;

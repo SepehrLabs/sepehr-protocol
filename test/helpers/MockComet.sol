@@ -26,6 +26,8 @@ contract MockComet is IComet {
 
     AssetInfo[] private _assets;
     address private _baseTokenPriceFeed;
+    address private _baseToken;
+    uint256 private _baseScale = 1e6;
 
     // ── Call recording ───────────────────────────────────────────────────
 
@@ -74,6 +76,18 @@ contract MockComet is IComet {
         address feed
     ) external {
         _baseTokenPriceFeed = feed;
+    }
+
+    function setBaseToken(
+        address token
+    ) external {
+        _baseToken = token;
+    }
+
+    function setBaseScale(
+        uint256 scale
+    ) external {
+        _baseScale = scale;
     }
 
     function addAsset(
@@ -158,8 +172,12 @@ contract MockComet is IComet {
         return _baseTokenPriceFeed;
     }
 
-    function baseToken() external pure returns (address) {
-        return address(0);
+    function baseToken() external view returns (address) {
+        return _baseToken;
+    }
+
+    function baseScale() external view returns (uint256) {
+        return _baseScale;
     }
 
     function isAllowed(

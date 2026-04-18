@@ -25,6 +25,10 @@ contract MoonwellAdapterTest is Test {
         comptroller.setOracle(address(oracle));
         mToken = new MockCToken("mUSDC", "mUSDC", address(underlying));
         adapter = new MoonwellAdapter(address(comptroller), address(mToken), core);
+
+        address[] memory assets = new address[](1);
+        assets[0] = address(mToken);
+        comptroller.setAssetsIn(user, assets);
     }
 
     function test_constructor_storesComptrollerAndMToken() public view {
@@ -59,8 +63,15 @@ contract MoonwellAdapterTest is Test {
     }
 
     function test_getHealthFactor_balancedReturnsOne() public {
+        // Fix for B8: distinguish zero-debt (returns max) from balanced-debt.
         comptroller.setAccountLiquidity(user, 0, 0, 0);
+        mToken.setBorrowBalance(user, 1);
         assertEq(adapter.getHealthFactor(user), 1e18);
+    }
+
+    function test_getHealthFactor_zeroDebtReturnsMax() public {
+        comptroller.setAccountLiquidity(user, 0, 0, 0);
+        assertEq(adapter.getHealthFactor(user), type(uint256).max);
     }
 
     function test_checkDelegation_reflectsAllowance() public {

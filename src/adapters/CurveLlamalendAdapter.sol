@@ -36,14 +36,18 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Curve's `health` is a WAD-scaled additive margin relative to the
+    ///      liquidation boundary: `collateralEquiv / debt - 1`. So the canonical
+    ///      HF in our scale is `HF_WAD = 1e18 + health`. Clamp at 0 when the
+    ///      margin has fallen to or past -100% (health <= -1e18).
+    ///      Audit B6: the prior `1e18 + uint256(health)` branch had no
+    ///      handling for negative health and collapsed the whole range to 0.
     function getHealthFactor(
         address user
     ) external view returns (uint256 healthFactor) {
         int256 health = CONTROLLER.health(user);
-        // Curve health: 0 = liquidation threshold, positive = healthy margin (WAD).
-        // Convert to standard HF where 1e18 = 1.0 (at liquidation).
-        if (health <= 0) return 0;
-        return 1e18 + uint256(health);
+        if (health <= -1e18) return 0;
+        return uint256(int256(1e18) + health);
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -91,21 +95,23 @@ contract CurveLlamalendAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev user_state returns [collateral, stablecoin, debt, N] in raw base
+    ///      units of each token. The raw collateral amount must be priced
+    ///      through Curve's WAD-scaled `price_oracle()` before it can be summed
+    ///      with the stablecoin (crvUSD ≈ $1, 18 dec). Output is USD-8 to
+    ///      match tier-cap accounting. Audit B7: the prior `(stab + coll) /
+    ///      1e10` summed token units across different assets without pricing,
+    ///      reporting nonsense values (a $500k WETH position as $500 billion).
     function getCollateralValueUsd(
         address user
     ) external view returns (uint256 usdValue) {
-        // user_state returns [collateral, stablecoin, debt, N].
         uint256[4] memory state = CONTROLLER.user_state(user);
         uint256 collateral = state[0];
         uint256 stablecoin = state[1];
         if (collateral == 0 && stablecoin == 0) return 0;
-        // Stablecoin portion is already USD-denominated (WAD). Convert to 8 decimals.
-        // Collateral portion needs price conversion via the oracle.
-        // For simplicity, use stablecoin + collateral valued at oracle price.
-        // The oracle is protocol-specific; approximate collateral value using stablecoin debt
-        // ratio. For on-chain accuracy, the keeper provides off-chain pricing.
-        // Return stablecoin value as the floor (8 decimals).
-        return (stablecoin + collateral) / 1e10;
+        uint256 price = CONTROLLER.price_oracle(); // WAD: USD per collateral token
+        uint256 collateralUsd18 = collateral * price / 1e18;
+        return (collateralUsd18 + stablecoin) / 1e10;
     }
 
     /// @inheritdoc IProtocolAdapter

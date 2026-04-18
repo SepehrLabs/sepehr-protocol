@@ -60,4 +60,6 @@ interface IComet {
     ) external view returns (uint256);
 
     function baseTokenPriceFeed() external view returns (address);
+
+    function baseScale() external view returns (uint256);
 }

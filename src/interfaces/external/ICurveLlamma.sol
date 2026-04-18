@@ -25,6 +25,9 @@ interface ICurveController {
     function collateral_token() external view returns (address);
 
     function borrowed_token() external view returns (address);
+
+    /// @notice WAD-scaled USD price of the collateral token.
+    function price_oracle() external view returns (uint256);
 }
 
 /// @notice Minimal Curve LLAMMA AMM interface.

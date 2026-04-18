@@ -53,30 +53,32 @@ contract CurveLlamalendAdapterTest is Test {
 
     // ─── getHealthFactor ───────────────────────────────────────────────
 
-    function test_getHealthFactor_returnsZeroWhenHealthIsZero() public {
+    function test_getHealthFactor_returnsOneAtThreshold() public {
+        // Curve health = 0 is the liquidation boundary ⇒ HF = 1.0.
         controller.setHealth(user, 0);
+        assertEq(adapter.getHealthFactor(user), 1e18);
+    }
+
+    function test_getHealthFactor_returnsZeroWhenClamped() public {
+        // health ≤ -1e18 ⇒ HF = 0 (margin gone, position unredeemable).
+        controller.setHealth(user, -1e18);
+        assertEq(adapter.getHealthFactor(user), 0);
+        controller.setHealth(user, -2e18);
         assertEq(adapter.getHealthFactor(user), 0);
     }
 
-    function test_getHealthFactor_returnsZeroWhenHealthIsNegative() public {
-        controller.setHealth(user, -1e18);
-        assertEq(adapter.getHealthFactor(user), 0);
+    function test_getHealthFactor_negativeButAboveFloor() public {
+        // health = -0.5e18 ⇒ HF = 0.5e18 (below liquidation, not yet worthless).
+        controller.setHealth(user, -0.5e18);
+        assertEq(adapter.getHealthFactor(user), 0.5e18);
     }
 
     function test_getHealthFactor_convertsPositiveHealth() public {
-        // health = 0.5e18 → HF = 1e18 + 0.5e18 = 1.5e18
         controller.setHealth(user, 0.5e18);
         assertEq(adapter.getHealthFactor(user), 1.5e18);
     }
 
-    function test_getHealthFactor_atThreshold() public {
-        // health = 0 → HF = 0 (at liquidation)
-        controller.setHealth(user, 0);
-        assertEq(adapter.getHealthFactor(user), 0);
-    }
-
     function test_getHealthFactor_highHealth() public {
-        // health = 2e18 → HF = 1e18 + 2e18 = 3e18
         controller.setHealth(user, 2e18);
         assertEq(adapter.getHealthFactor(user), 3e18);
     }
@@ -192,42 +194,41 @@ contract CurveLlamalendAdapterTest is Test {
     }
 
     function test_getCollateralValueUsd_stablecoinOnly() public {
-        // stablecoin=500e18, collateral=0
-        // result = (500e18 + 0) / 1e10 = 500e8
+        // Stablecoin only — price doesn't matter because collateral=0.
         controller.setUserState(user, 0, 500e18, 0, 0);
         assertEq(adapter.getCollateralValueUsd(user), 500e8);
     }
 
     function test_getCollateralValueUsd_collateralOnly() public {
-        // collateral=100e18, stablecoin=0
-        // result = (100e18 + 0) / 1e10 = 100e8
+        // 100e18 collateral @ $2500 (WAD) → USD-18 = 250_000e18 → USD-8 = 250_000e8.
         controller.setUserState(user, 100e18, 0, 0, 0);
-        assertEq(adapter.getCollateralValueUsd(user), 100e8);
+        controller.setPrice(2500e18);
+        assertEq(adapter.getCollateralValueUsd(user), 250_000e8);
     }
 
     function test_getCollateralValueUsd_bothNonZero() public {
-        // collateral=100e18, stablecoin=200e18
-        // result = (200e18 + 100e18) / 1e10 = 300e8
+        // 100e18 coll @ $2500 = 250_000e18 USD-18; + 200e18 stab = 250_200e18; → 250_200e8 USD-8.
         controller.setUserState(user, 100e18, 200e18, 0, 0);
-        assertEq(adapter.getCollateralValueUsd(user), 300e8);
+        controller.setPrice(2500e18);
+        assertEq(adapter.getCollateralValueUsd(user), 250_200e8);
     }
 
     // ─── Fuzz tests ────────────────────────────────────────────────────
 
-    function testFuzz_getHealthFactor_negativeReturnsZero(
+    function testFuzz_getHealthFactor_belowFloorReturnsZero(
         int256 health
     ) public {
-        health = bound(health, type(int256).min, 0);
+        health = bound(health, type(int256).min, -1e18);
         controller.setHealth(user, health);
         assertEq(adapter.getHealthFactor(user), 0);
     }
 
-    function testFuzz_getHealthFactor_positiveAddsOne(
+    function testFuzz_getHealthFactor_aboveFloorAddsOne(
         int256 health
     ) public {
-        health = bound(health, 1, type(int128).max);
+        health = bound(health, -1e18 + 1, type(int128).max);
         controller.setHealth(user, health);
-        assertEq(adapter.getHealthFactor(user), 1e18 + uint256(health));
+        assertEq(adapter.getHealthFactor(user), uint256(int256(1e18) + health));
     }
 
     function testFuzz_repayAmount(
@@ -246,19 +247,17 @@ contract CurveLlamalendAdapterTest is Test {
     }
 
     function testFuzz_getCollateralValueUsd(
-        uint256 collateral,
-        uint256 stablecoin
+        uint128 collateral,
+        uint128 stablecoin,
+        uint64 priceWad
     ) public {
-        collateral = bound(collateral, 0, type(uint128).max);
-        stablecoin = bound(stablecoin, 0, type(uint128).max);
+        vm.assume(priceWad > 0);
 
         controller.setUserState(user, collateral, stablecoin, 0, 0);
+        controller.setPrice(uint256(priceWad));
 
-        if (collateral == 0 && stablecoin == 0) {
-            assertEq(adapter.getCollateralValueUsd(user), 0);
-        } else {
-            uint256 expected = (stablecoin + collateral) / 1e10;
-            assertEq(adapter.getCollateralValueUsd(user), expected);
-        }
+        uint256 collateralUsd18 = uint256(collateral) * uint256(priceWad) / 1e18;
+        uint256 expected = (collateralUsd18 + uint256(stablecoin)) / 1e10;
+        assertEq(adapter.getCollateralValueUsd(user), expected);
     }
 }

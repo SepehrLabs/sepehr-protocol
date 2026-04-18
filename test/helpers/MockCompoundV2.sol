@@ -32,6 +32,7 @@ contract MockComptroller is IComptroller {
     }
 
     mapping(address => Liquidity) private _liquidity;
+    mapping(address => address[]) private _assetsIn;
     address private _oracle;
 
     function setOracle(
@@ -60,10 +61,20 @@ contract MockComptroller is IComptroller {
         return _oracle;
     }
 
+    function setAssetsIn(
+        address user,
+        address[] calldata assets
+    ) external {
+        delete _assetsIn[user];
+        for (uint256 i = 0; i < assets.length; ++i) {
+            _assetsIn[user].push(assets[i]);
+        }
+    }
+
     function getAssetsIn(
-        address
-    ) external pure returns (address[] memory) {
-        return new address[](0);
+        address account
+    ) external view returns (address[] memory) {
+        return _assetsIn[account];
     }
 }
 

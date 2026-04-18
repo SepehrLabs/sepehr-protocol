@@ -26,6 +26,10 @@ contract CompoundV2AdapterTest is Test {
         cToken = new MockCToken("cDAI", "cDAI", address(underlying));
 
         adapter = new CompoundV2Adapter(address(comptroller), address(cToken), core);
+
+        address[] memory assets = new address[](1);
+        assets[0] = address(cToken);
+        comptroller.setAssetsIn(user, assets);
     }
 
     // ── Constructor ──────────────────────────────────────────────────────
@@ -63,9 +67,19 @@ contract CompoundV2AdapterTest is Test {
         assertEq(adapter.getHealthFactor(user), type(uint256).max);
     }
 
-    function test_getHealthFactor_returns1e18WhenNoLiquidityNoShortfall() public {
+    function test_getHealthFactor_returns1e18WhenBalancedWithDebt() public {
+        // liquidity == 0 && shortfall == 0 with nonzero debt = perfect balance,
+        // HF = 1.0. Fix for audit B8 (zero-debt false-positive).
         comptroller.setAccountLiquidity(user, 0, 0, 0);
+        cToken.setBorrowBalance(user, 1);
         assertEq(adapter.getHealthFactor(user), 1e18);
+    }
+
+    function test_getHealthFactor_returnsMaxWhenZeroDebt() public {
+        // No liquidity, no shortfall, and no debt anywhere = zero-debt account,
+        // HF = ∞. Prevents keeper from triggering on freshly-repaid positions.
+        comptroller.setAccountLiquidity(user, 0, 0, 0);
+        assertEq(adapter.getHealthFactor(user), type(uint256).max);
     }
 
     function test_getHealthFactor_shortfallTakesPrecedence() public {
@@ -232,17 +246,21 @@ contract CompoundV2AdapterTest is Test {
 
     function testFuzz_getHealthFactor_classifiesCorrectly(
         uint128 liquidity,
-        uint128 shortfall
+        uint128 shortfall,
+        uint128 debt
     ) public {
         comptroller.setAccountLiquidity(user, 0, liquidity, shortfall);
+        cToken.setBorrowBalance(user, debt);
 
         uint256 hf = adapter.getHealthFactor(user);
         if (shortfall > 0) {
             assertEq(hf, 0);
         } else if (liquidity > 0) {
             assertEq(hf, type(uint256).max);
-        } else {
+        } else if (debt > 0) {
             assertEq(hf, 1e18);
+        } else {
+            assertEq(hf, type(uint256).max);
         }
     }
 

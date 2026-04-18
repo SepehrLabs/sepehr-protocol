@@ -37,13 +37,21 @@ contract VenusAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Venus Comptroller returns (0, 0, 0) for both zero-debt and
+    ///      perfectly-balanced accounts. Only the latter is at liquidation
+    ///      risk, so we disambiguate by summing borrows across all markets the
+    ///      user has entered. Pure zero-debt returns max — otherwise 1e18.
     function getHealthFactor(
         address user
     ) external view returns (uint256) {
         (, uint256 liquidity, uint256 shortfall) = COMPTROLLER.getAccountLiquidity(user);
         if (shortfall > 0) return 0;
         if (liquidity > 0) return type(uint256).max;
-        return 1e18;
+        address[] memory assets = COMPTROLLER.getAssetsIn(user);
+        for (uint256 i = 0; i < assets.length; ++i) {
+            if (ICToken(assets[i]).borrowBalanceStored(user) > 0) return 1e18;
+        }
+        return type(uint256).max;
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -83,15 +91,23 @@ contract VenusAdapter is IProtocolAdapter {
     }
 
     /// @inheritdoc IProtocolAdapter
+    /// @dev Sums value across all vTokens the user has entered, not just the
+    ///      constructor-wired VTOKEN. Querying a single vToken would let users
+    ///      evade tier caps by parking collateral in other Venus markets.
     function getCollateralValueUsd(
         address user
     ) external view returns (uint256 usdValue) {
         ICompoundOracle oracle = ICompoundOracle(COMPTROLLER.oracle());
-        uint256 price = oracle.getUnderlyingPrice(address(VTOKEN));
-        uint256 vTokenBalance = VTOKEN.balanceOf(user);
-        uint256 exchangeRate = VTOKEN.exchangeRateStored();
-        uint256 underlyingBalance = vTokenBalance * exchangeRate / 1e18;
-        usdValue = underlyingBalance * price / 1e18;
+        address[] memory assets = COMPTROLLER.getAssetsIn(user);
+        for (uint256 i = 0; i < assets.length; ++i) {
+            ICToken market = ICToken(assets[i]);
+            uint256 vTokenBalance = market.balanceOf(user);
+            if (vTokenBalance == 0) continue;
+            uint256 exchangeRate = market.exchangeRateStored();
+            uint256 price = oracle.getUnderlyingPrice(assets[i]);
+            uint256 underlyingBalance = vTokenBalance * exchangeRate / 1e18;
+            usdValue += underlyingBalance * price / 1e18;
+        }
     }
 
     /// @inheritdoc IProtocolAdapter

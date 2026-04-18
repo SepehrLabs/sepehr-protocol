@@ -19,6 +19,7 @@ contract MockCurveController is ICurveController {
     mapping(address => uint256[4]) private _userState;
     address private _collateralToken;
     address private _borrowedToken;
+    uint256 private _price = 1e18;
 
     RepayCall[] public repayCalls;
     RemoveCollateralCall[] public removeCollateralCalls;
@@ -48,6 +49,12 @@ contract MockCurveController is ICurveController {
         uint256 N
     ) external {
         _userState[user] = [collateral, stablecoin, debt, N];
+    }
+
+    function setPrice(
+        uint256 priceWad
+    ) external {
+        _price = priceWad;
     }
 
     // ── Getters for recorded calls ─────────────────────────────────────
@@ -100,5 +107,9 @@ contract MockCurveController is ICurveController {
 
     function borrowed_token() external view override returns (address) {
         return _borrowedToken;
+    }
+
+    function price_oracle() external view override returns (uint256) {
+        return _price;
     }
 }
