@@ -47,6 +47,37 @@ contract MockBalancerVault {
     }
 }
 
+/// @notice Simulates a Vault that (after an upgrade) pushes 2-token flash loans.
+/// @dev Used to exercise BalancerFlashLoanProvider's C5 bound (tokens.length == 1).
+contract MaliciousBalancerVault {
+    address public feesCollector;
+
+    constructor(
+        address _feesCollector
+    ) {
+        feesCollector = _feesCollector;
+    }
+
+    function getProtocolFeesCollector() external view returns (address) {
+        return feesCollector;
+    }
+
+    function flashLoan(
+        address recipient,
+        address[] memory, /*tokens*/
+        uint256[] memory, /*amounts*/
+        bytes memory userData
+    ) external {
+        address[] memory twoTokens = new address[](2);
+        twoTokens[0] = address(1);
+        twoTokens[1] = address(2);
+        uint256[] memory twoAmounts = new uint256[](2);
+        uint256[] memory twoFees = new uint256[](2);
+
+        IFlashLoanRecipient(recipient).receiveFlashLoan(twoTokens, twoAmounts, twoFees, userData);
+    }
+}
+
 /// @notice Mock ProtocolFeesCollector returning 0 fee by default.
 contract MockBalancerFeesCollector {
     uint256 public flashLoanFeePercentage;

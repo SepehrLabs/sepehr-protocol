@@ -7,10 +7,14 @@ import {IAavePool} from "../interfaces/external/IAavePool.sol";
 import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title AaveFlashLoanProvider
 /// @notice Wraps Aave V3 flash loans behind the IFlashLoanProvider interface.
-contract AaveFlashLoanProvider is IFlashLoanProvider {
+/// @dev C7: `executeOperation` uses `nonReentrant` as defense-in-depth on top of
+///      the msg.sender/initiator checks — a compromised Pool cannot cause re-entrant
+///      dispatch into Sepehr callbacks via this provider.
+contract AaveFlashLoanProvider is IFlashLoanProvider, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IAavePool public immutable POOL;
@@ -56,7 +60,7 @@ contract AaveFlashLoanProvider is IFlashLoanProvider {
         uint256 premium,
         address initiator,
         bytes calldata
-    ) external returns (bool) {
+    ) external nonReentrant returns (bool) {
         if (msg.sender != address(POOL)) revert SepehrErrors.InvalidFlashLoanCallback();
         if (initiator != address(this)) revert SepehrErrors.InvalidFlashLoanCallback();
         if (_activeCallback == address(0)) revert SepehrErrors.InvalidFlashLoanCallback();

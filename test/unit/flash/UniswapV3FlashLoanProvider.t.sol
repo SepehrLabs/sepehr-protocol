@@ -189,6 +189,16 @@ contract UniswapV3FlashLoanProviderTest is Test {
         assertFalse(provider.isAvailable(address(tokenA), POOL_LIQUIDITY + 1));
     }
 
+    function test_isAvailable_falseWhenPoolLocked() public {
+        // C6: isAvailable must return false while slot0.unlocked == false,
+        // so the selector doesn't pick this provider mid-swap and waste a
+        // top-level flashBorrow on a pool that would revert with `LOK`.
+        pool.setUnlocked(false);
+        assertFalse(provider.isAvailable(address(tokenA), BORROW_AMOUNT));
+        pool.setUnlocked(true);
+        assertTrue(provider.isAvailable(address(tokenA), BORROW_AMOUNT));
+    }
+
     // ── Fuzz ─────────────────────────────────────────────────────────────
 
     function testFuzz_flashBorrow_correctFeeForToken0(

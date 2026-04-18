@@ -7,10 +7,14 @@ import {IBalancerFeesCollector, IBalancerVault} from "../interfaces/external/IBa
 import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title BalancerFlashLoanProvider
 /// @notice Wraps Balancer V2 Vault flash loans behind the IFlashLoanProvider interface.
-contract BalancerFlashLoanProvider is IFlashLoanProvider {
+/// @dev C7: callbacks use `nonReentrant` as defense-in-depth on top of the
+///      msg.sender/initiator checks — a compromised Vault cannot cause re-entrant
+///      dispatch into Sepehr callbacks via this provider.
+contract BalancerFlashLoanProvider is IFlashLoanProvider, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IBalancerVault public immutable VAULT;
@@ -59,9 +63,15 @@ contract BalancerFlashLoanProvider is IFlashLoanProvider {
         uint256[] memory amounts,
         uint256[] memory feeAmounts,
         bytes memory
-    ) external {
+    ) external nonReentrant {
         if (msg.sender != address(VAULT)) revert SepehrErrors.InvalidFlashLoanCallback();
         if (_activeCallback == address(0)) revert SepehrErrors.InvalidFlashLoanCallback();
+        // C5: Bound to single-token flash loans so a future Vault upgrade pushing
+        // 2+ tokens cannot silently advance past the first element and desynchronise
+        // the amounts/fees the callback sees.
+        if (tokens.length != 1 || amounts.length != 1 || feeAmounts.length != 1) {
+            revert SepehrErrors.InvalidFlashLoanCallback();
+        }
 
         address asset = tokens[0];
         uint256 amount = amounts[0];

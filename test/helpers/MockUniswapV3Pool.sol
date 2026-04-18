@@ -49,11 +49,12 @@ contract MockUniswapV3Pool {
     }
 
     function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool) {
-        return (_sqrtPriceX96, _tick, 0, 0, 0, 0, true);
+        return (_sqrtPriceX96, _tick, 0, 0, 0, 0, _unlocked);
     }
 
     uint160 private _sqrtPriceX96;
     int24 private _tick;
+    bool private _unlocked = true;
 
     function setSlot0(
         uint160 sqrtPriceX96_,
@@ -61,6 +62,12 @@ contract MockUniswapV3Pool {
     ) external {
         _sqrtPriceX96 = sqrtPriceX96_;
         _tick = tick_;
+    }
+
+    function setUnlocked(
+        bool unlocked_
+    ) external {
+        _unlocked = unlocked_;
     }
 
     function _mulDivRoundUp(

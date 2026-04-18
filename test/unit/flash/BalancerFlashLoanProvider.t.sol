@@ -3,7 +3,11 @@ pragma solidity ^0.8.28;
 
 import {BalancerFlashLoanProvider} from "../../../src/flash/BalancerFlashLoanProvider.sol";
 import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
-import {MockBalancerFeesCollector, MockBalancerVault} from "../../helpers/MockBalancerVault.sol";
+import {
+    MaliciousBalancerVault,
+    MockBalancerFeesCollector,
+    MockBalancerVault
+} from "../../helpers/MockBalancerVault.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {SimpleCallback} from "../../helpers/SimpleCallback.sol";
 import {Test} from "forge-std/Test.sol";
@@ -95,6 +99,18 @@ contract BalancerFlashLoanProviderTest is Test {
         vm.prank(address(vault));
         vm.expectRevert(SepehrErrors.InvalidFlashLoanCallback.selector);
         provider.receiveFlashLoan(tokens, amounts, feeAmounts, "");
+    }
+
+    function test_receiveFlashLoan_revertsOnMultiTokenCallback() public {
+        // C5: a future Vault upgrade (or compromise) pushing 2-token flash loans
+        // must not desynchronise the callback. The provider should bound
+        // tokens.length == 1 and revert otherwise.
+        MaliciousBalancerVault badVault = new MaliciousBalancerVault(address(feesCollector));
+        BalancerFlashLoanProvider badProvider = new BalancerFlashLoanProvider(address(badVault));
+        token.mint(address(badVault), VAULT_LIQUIDITY);
+
+        vm.expectRevert(SepehrErrors.InvalidFlashLoanCallback.selector);
+        badProvider.flashBorrow(address(token), BORROW_AMOUNT, address(callback), "");
     }
 
     // ── getFlashLoanFeeBps ───────────────────────────────────────────────

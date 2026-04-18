@@ -7,11 +7,15 @@ import {IUniswapV3Pool} from "../interfaces/external/IUniswapV3Pool.sol";
 import {SepehrErrors} from "../libraries/SepehrErrors.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title UniswapV3FlashLoanProvider
 /// @notice Wraps a single Uniswap V3 pool's flash capability behind IFlashLoanProvider.
 ///         Deploy one instance per pool. The asset must be one of the pool's two tokens.
-contract UniswapV3FlashLoanProvider is IFlashLoanProvider {
+/// @dev C7: `uniswapV3FlashCallback` uses `nonReentrant` as defense-in-depth on top
+///      of the msg.sender check — a compromised Pool cannot cause re-entrant dispatch
+///      into Sepehr callbacks via this provider.
+contract UniswapV3FlashLoanProvider is IFlashLoanProvider, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IUniswapV3Pool public immutable POOL;
@@ -67,7 +71,7 @@ contract UniswapV3FlashLoanProvider is IFlashLoanProvider {
         uint256 fee0,
         uint256 fee1,
         bytes calldata
-    ) external {
+    ) external nonReentrant {
         if (msg.sender != address(POOL)) revert SepehrErrors.InvalidFlashLoanCallback();
         if (_activeCallback == address(0)) revert SepehrErrors.InvalidFlashLoanCallback();
 
@@ -103,11 +107,17 @@ contract UniswapV3FlashLoanProvider is IFlashLoanProvider {
     }
 
     /// @inheritdoc IFlashLoanProvider
+    /// @dev C6: check `slot0.unlocked` so the selector does not pick this provider
+    ///      mid-swap — `pool.flash` reverts with `LOK` when the pool is locked, which
+    ///      would waste a top-level `flashBorrow` attempt and force the fallback chain
+    ///      to retry a second provider.
     function isAvailable(
         address asset,
         uint256 amount
     ) external view override returns (bool) {
         if (asset != POOL.token0() && asset != POOL.token1()) return false;
-        return IERC20(asset).balanceOf(address(POOL)) >= amount;
+        if (IERC20(asset).balanceOf(address(POOL)) < amount) return false;
+        (,,,,,, bool unlocked) = POOL.slot0();
+        return unlocked;
     }
 }
