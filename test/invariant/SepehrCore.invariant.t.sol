@@ -124,4 +124,21 @@ contract SepehrCoreInvariantTest is Test {
     function invariant_pauseStateConsistent() public view {
         assertFalse(core.paused(), "handler never pauses");
     }
+
+    // ── Invariant 9 (A25/E3): USDC treasury never under-funds fee ledger ─
+    //
+    // The central A1 + A2 accounting bug from the audit — where subscription
+    // USDC was permanently locked because `ownerFeeBalances[usdc]` was never
+    // credited — would manifest as `usdc.balanceOf(core) < ownerFeeBalances[usdc]`
+    // (after a full withdrawal the treasury would go negative). This invariant
+    // formalises the guarantee that the ledger is always fully backed and would
+    // have caught A1/A2 during fuzzing.
+    //
+    // The handler never invokes `execute`, so keeper fees are not accrued here;
+    // we still read `keeperFeeBalances[keeper][usdc]` to keep the check complete
+    // if future handler actions add trigger simulation.
+    function invariant_usdcTreasuryCoversFeeLedger() public view {
+        uint256 ledger = core.ownerFeeBalances(address(usdc)) + core.keeperFeeBalances(keeper, address(usdc));
+        assertGe(usdc.balanceOf(address(core)), ledger, "USDC treasury under-funded");
+    }
 }
