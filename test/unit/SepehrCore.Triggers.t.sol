@@ -67,7 +67,7 @@ contract SepehrCoreTriggersTest is Test {
 
         // A7 gate intentionally disabled (0) for trigger-path tests; the gate is exercised
         // separately in the Admin and Subscriptions suites where it is load-bearing.
-        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 0);
+        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 0, type(uint256).max);
 
         vm.startPrank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));

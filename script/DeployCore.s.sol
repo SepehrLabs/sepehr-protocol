@@ -14,6 +14,10 @@ contract DeployCore is Script {
         address usdcAddress = vm.envAddress("USDC_ADDRESS");
         uint256 timelockDelay = vm.envOr("SEPEHR_TIMELOCK_DELAY_SECONDS", uint256(172_800));
         uint256 minCollateralUsd = vm.envOr("SEPEHR_MIN_COLLATERAL_USD", uint256(500e8));
+        // G4: protocol-wide TVL cap (USD-8). V1 default is $75k = `7_500_000_000_000` to
+        // bound exposure while keeper performance is empirically validated; governance
+        // raises it via `setTvlCapUsd` once the runtime numbers justify it.
+        uint256 tvlCapUsd = vm.envOr("SEPEHR_TVL_CAP_USD", uint256(7_500_000_000_000));
 
         vm.startBroadcast(deployer);
 
@@ -27,7 +31,8 @@ contract DeployCore is Script {
         SepehrTimelock timelock = new SepehrTimelock(timelockDelay, proposers, executors, address(0));
         console.log("SepehrTimelock deployed at:", address(timelock));
 
-        SepehrCore core = new SepehrCore(owner, address(timelock), pauseGuardian, usdcAddress, minCollateralUsd);
+        SepehrCore core =
+            new SepehrCore(owner, address(timelock), pauseGuardian, usdcAddress, minCollateralUsd, tvlCapUsd);
         console.log("SepehrCore deployed at:", address(core));
 
         // M3: freeze the strict-canonical-routes default post-deploy. A fresh deploy MUST

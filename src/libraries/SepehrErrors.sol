@@ -33,6 +33,10 @@ library SepehrErrors {
 
     error BelowMinimumCollateral(uint256 usdValue, uint256 minimumUsd);
     error TierCollateralCapExceeded(uint256 usdValue, uint256 capUsd);
+    /// @notice G4: thrown by `enableProtection` when adding the new position's snapshotted
+    /// collateral USD value would push the protocol-wide `protectedCollateralUsd` above
+    /// `tvlCapUsd`. `attempted` is the prospective new total; `cap` is the configured ceiling.
+    error TvlCapExceeded(uint256 attempted, uint256 cap);
     error ThresholdTooLow(uint256 threshold, uint256 minimum);
     error RepayPercentTooHigh(uint256 bps, uint256 maxBps);
     error InvalidSlippage(uint256 bps);

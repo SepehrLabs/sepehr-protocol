@@ -134,6 +134,25 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// to disable the gate entirely.
     uint256 public minCollateralUsd;
 
+    /// @notice G4: protocol-wide upper bound (USD-8) on the sum of snapshotted collateral
+    /// values across every active position. Set to `type(uint256).max` to disable the cap.
+    /// V1 deploys are expected to launch with a conservative cap (e.g. $75k = `7_500_000_000_000`)
+    /// and let governance raise it as keeper performance is empirically validated. The cap
+    /// is a forward-looking gate only: lowering it never disables already-enabled positions,
+    /// so a tightening proposal cannot retroactively brick users.
+    uint256 public tvlCapUsd;
+    /// @notice G4: running sum of `protectionCollateralSnapshot` over all active positions.
+    /// Maintained by `enableProtection` (add) and `disableProtection` / `unsubscribe` (sub).
+    /// The snapshot is taken once at enable time and is not re-read; this means the running
+    /// total drifts as collateral USD prices move, but for the cap's purpose (a sanity
+    /// guardrail against unbounded protocol exposure) a stale-but-deterministic accounting
+    /// beats a live-but-walk-all-positions accounting.
+    uint256 public protectedCollateralUsd;
+    /// @notice G4: per-(user, protocolKey) snapshot of `getCollateralValueUsd` taken at
+    /// `enableProtection`. Read by `disableProtection` / `unsubscribe` to decrement the
+    /// running total by the same amount that was added on enable, even if prices have moved.
+    mapping(address user => mapping(bytes32 protocolKey => uint256)) public protectionCollateralSnapshot;
+
     mapping(address => bool) public keepers;
     mapping(bytes32 => AdapterEntry) public adapters;
     mapping(address => bool) public allowedFlashProviders;
@@ -247,6 +266,10 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @param _pauseGuardian address able to pause alongside the owner for rapid incident response.
     /// @param _usdc subscription payment token.
     /// @param _minCollateralUsd minimum USD-8 collateral required at `enableProtection`; 0 disables.
+    /// @param _tvlCapUsd G4: protocol-wide cap on the sum of snapshotted collateral USD
+    /// across all active positions. Pass `type(uint256).max` to disable the cap (test fixtures
+    /// and forks do this); production deploys are expected to start with a conservative ceiling
+    /// (V1 default: $75k = `7_500_000_000_000`) and let governance raise it via `setTvlCapUsd`.
     /// @dev A6: the legacy `_subscriptionOracle` constructor slot was removed because the oracle
     /// was never read. Per-position USD value comes from `adapter.getCollateralValueUsd()`, which
     /// already exists for the tier-cap path and is trust-minimized by timelock-registered adapters.
@@ -255,7 +278,8 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         address _timelock,
         address _pauseGuardian,
         address _usdc,
-        uint256 _minCollateralUsd
+        uint256 _minCollateralUsd,
+        uint256 _tvlCapUsd
     ) Ownable(_owner) {
         if (_timelock == address(0)) revert SepehrErrors.ZeroAddress();
         if (_pauseGuardian == address(0)) revert SepehrErrors.ZeroAddress();
@@ -265,6 +289,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         pauseGuardian = _pauseGuardian;
         usdc = IERC20(_usdc);
         minCollateralUsd = _minCollateralUsd;
+        tvlCapUsd = _tvlCapUsd;
     }
 
     // ─── User: Subscriptions ─────────────────────────────────────
@@ -394,8 +419,19 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         // event ordering matches enable-time.
         bytes32[] storage keys = _userProtocols[msg.sender];
         uint256 n = keys.length;
+        // G4: aggregate the per-protocol snapshots in a single pass so the running TVL total
+        // is decremented exactly once at the end. Per-iteration `protectedCollateralUsd -=`
+        // would still be correct but wastes a SSTORE per protocol; users with N protected
+        // protocols pay one SSTORE here regardless of N.
+        uint256 capRefund;
         for (uint256 i = 0; i < n; i++) {
-            delete _protections[msg.sender][keys[i]];
+            bytes32 key = keys[i];
+            capRefund += protectionCollateralSnapshot[msg.sender][key];
+            delete protectionCollateralSnapshot[msg.sender][key];
+            delete _protections[msg.sender][key];
+        }
+        if (capRefund != 0) {
+            protectedCollateralUsd -= capRefund;
         }
         if (n > 0) {
             delete _userProtocols[msg.sender];
@@ -432,16 +468,24 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             revert SepehrErrors.DelegationRevoked(msg.sender, protocolKey);
         }
 
-        // A7: minimum-collateral gate. The gate was specified in the error library but never
-        // thrown — so a user could subscribe to the free/cheap tiers with a dust position and
-        // waste keeper gas on forever-unprofitable triggers. `minCollateralUsd == 0` is
-        // treated as "disabled" so test fixtures and initial deploys can opt out.
-        if (minCollateralUsd != 0) {
-            uint256 collateralUsd = entry.adapter.getCollateralValueUsd(msg.sender);
-            if (collateralUsd < minCollateralUsd) {
-                revert SepehrErrors.BelowMinimumCollateral(collateralUsd, minCollateralUsd);
-            }
+        // A7 + G4: read the user's collateral value once and use it for two checks:
+        //   1. minimum-collateral gate (A7): rejects dust positions that would waste keeper
+        //      gas on triggers whose fee will never recoup gas costs. `minCollateralUsd == 0`
+        //      disables the floor for test fixtures and initial deploys.
+        //   2. protocol-wide TVL cap (G4): snapshots the value into
+        //      `protectionCollateralSnapshot` and bumps `protectedCollateralUsd`. The cap is
+        //      a forward-looking guardrail; lowering it via governance never disables already-
+        //      enabled positions. `tvlCapUsd == type(uint256).max` disables the cap.
+        uint256 collateralUsd = entry.adapter.getCollateralValueUsd(msg.sender);
+        if (minCollateralUsd != 0 && collateralUsd < minCollateralUsd) {
+            revert SepehrErrors.BelowMinimumCollateral(collateralUsd, minCollateralUsd);
         }
+        uint256 newProtectedTotal = protectedCollateralUsd + collateralUsd;
+        if (newProtectedTotal > tvlCapUsd) {
+            revert SepehrErrors.TvlCapExceeded(newProtectedTotal, tvlCapUsd);
+        }
+        protectedCollateralUsd = newProtectedTotal;
+        protectionCollateralSnapshot[msg.sender][protocolKey] = collateralUsd;
 
         _protections[msg.sender][protocolKey] = PositionProtection({
             enabled: true, thresholdHF: thresholdHF, maxSlippageBps: maxSlippageBps, repayPercentBps: repayPercentBps
@@ -457,6 +501,16 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     ) external override {
         if (!_protections[msg.sender][protocolKey].enabled) {
             revert SepehrErrors.ProtectionNotEnabled(msg.sender, protocolKey);
+        }
+        // G4: refund the cap budget by exactly the snapshot taken at enable time, even if
+        // the live collateral value has since drifted. Reading the live value here would
+        // let a user front-run a price drop to enable a position cheaply (low snapshot)
+        // and disable it after a price rally (high refund), draining the running total
+        // below zero (or, with checked arithmetic, reverting on disable and bricking exit).
+        uint256 snapshot = protectionCollateralSnapshot[msg.sender][protocolKey];
+        if (snapshot != 0) {
+            protectedCollateralUsd -= snapshot;
+            delete protectionCollateralSnapshot[msg.sender][protocolKey];
         }
         delete _protections[msg.sender][protocolKey];
         _removeUserProtocol(msg.sender, protocolKey);
@@ -976,6 +1030,21 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         uint256 old = minCollateralUsd;
         minCollateralUsd = newMin;
         emit SepehrEvents.MinCollateralUsdUpdated(old, newMin);
+    }
+
+    /// @notice G4: update the protocol-wide TVL cap (sum of snapshotted collateral USD-8 across
+    /// every active position). Pass `type(uint256).max` to remove the cap entirely. Lowering the
+    /// cap below `protectedCollateralUsd` does NOT disable existing positions — only future
+    /// `enableProtection` calls are gated, so a tightening proposal cannot retroactively brick
+    /// users. Raising the cap is the standard governance path as keeper performance is validated.
+    /// @dev Timelock-gated. No cooldown: the cap is a forward-looking guardrail, not a price.
+    /// @param newCap New cap in USD-8 units (e.g. `7_500_000_000_000` = $75k).
+    function setTvlCapUsd(
+        uint256 newCap
+    ) external onlyTimelock {
+        uint256 old = tvlCapUsd;
+        tvlCapUsd = newCap;
+        emit SepehrEvents.TvlCapUpdated(old, newCap);
     }
 
     /// @notice Grant a Titan (tier 4) subscription free of charge.

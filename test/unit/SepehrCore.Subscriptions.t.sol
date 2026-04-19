@@ -51,7 +51,7 @@ contract SepehrCoreSubscriptionsTest is Test {
     function setUp() public {
         usdc = new MockERC20("USD Coin", "USDC");
 
-        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 500e8);
+        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 500e8, type(uint256).max);
 
         usdc.mint(alice, 10_000e6);
         usdc.mint(bob, 10_000e6);

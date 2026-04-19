@@ -48,6 +48,11 @@ library SepehrEvents {
     event KeeperFeesWithdrawn(address indexed keeper, address indexed asset, uint256 amount);
     event TierFeeBpsUpdated(uint8 indexed tier, uint256 oldBps, uint256 newBps);
     event MinCollateralUsdUpdated(uint256 oldMin, uint256 newMin);
+    /// @notice G4: emitted when the timelock updates the protocol-wide TVL cap (USD-8).
+    /// `oldCap` and `newCap` are the prior and new ceilings; `protectedCollateralUsd` is
+    /// not changed by this call so existing positions remain enabled even if the new cap
+    /// is below the current running total — only future `enableProtection` calls are gated.
+    event TvlCapUpdated(uint256 oldCap, uint256 newCap);
     /// @notice A13: emitted when the timelock updates a tier's subscription price. `annual`
     /// discriminates monthly (`false`) vs annual (`true`) schedule so off-chain indexers can
     /// reconstruct either curve without extra state.

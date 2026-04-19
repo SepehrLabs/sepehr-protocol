@@ -43,7 +43,7 @@ contract SepehrCoreAdminTest is Test {
         adapter = new MockAdapter();
         usdc = new MockERC20("USD Coin", "USDC");
 
-        core = new SepehrCore(owner, timelock, guardian, address(usdc), 500e8);
+        core = new SepehrCore(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max);
     }
 
     // ─── addAdapter ─────────────────────────────────────────────
@@ -711,17 +711,17 @@ contract SepehrCoreAdminTest is Test {
 
     function test_constructor_revertsOnZeroTimelock() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, address(0), guardian, address(usdc), 500e8);
+        new SepehrCore(owner, address(0), guardian, address(usdc), 500e8, type(uint256).max);
     }
 
     function test_constructor_revertsOnZeroGuardian() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, timelock, address(0), address(usdc), 500e8);
+        new SepehrCore(owner, timelock, address(0), address(usdc), 500e8, type(uint256).max);
     }
 
     function test_constructor_revertsOnZeroUsdc() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, timelock, guardian, address(0), 500e8);
+        new SepehrCore(owner, timelock, guardian, address(0), 500e8, type(uint256).max);
     }
 
     function test_constructor_setsInitialValues() public {
