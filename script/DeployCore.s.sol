@@ -31,8 +31,9 @@ contract DeployCore is Script {
         SepehrTimelock timelock = new SepehrTimelock(timelockDelay, proposers, executors, address(0));
         console.log("SepehrTimelock deployed at:", address(timelock));
 
-        SepehrCore core =
-            new SepehrCore(owner, address(timelock), pauseGuardian, usdcAddress, minCollateralUsd, tvlCapUsd);
+        SepehrCore core = new SepehrCore(
+            owner, address(timelock), pauseGuardian, usdcAddress, minCollateralUsd, tvlCapUsd, block.chainid
+        );
         console.log("SepehrCore deployed at:", address(core));
 
         // M3: freeze the strict-canonical-routes default post-deploy. A fresh deploy MUST
