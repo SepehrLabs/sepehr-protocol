@@ -7,7 +7,23 @@ import {SepehrCore} from "../src/SepehrCore.sol";
 import {SepehrTimelock} from "../src/SepehrTimelock.sol";
 
 contract DeployCore is Script {
+    /// @notice Arbitrum One.
+    uint256 internal constant ARBITRUM_ONE_CHAIN_ID = 42_161;
+    /// @notice Arbitrum Sepolia (public testnet).
+    uint256 internal constant ARBITRUM_SEPOLIA_CHAIN_ID = 421_614;
+
     function run() external {
+        // ADR-0011: V1 is a mono-Arbitrum deploy. The script refuses to broadcast on any
+        // chain that isn't Arbitrum One or Arbitrum Sepolia so an operator cannot
+        // accidentally spin up a half-configured Sepehr on the wrong network (which would
+        // then accept `subscribe` calls the keeper on the real chain can never honour).
+        // Local anvil / unit tests go through `E2ELocalDeploy.s.sol`, which is deliberately
+        // unrestricted.
+        require(
+            block.chainid == ARBITRUM_ONE_CHAIN_ID || block.chainid == ARBITRUM_SEPOLIA_CHAIN_ID,
+            "DeployCore: only Arbitrum One or Arbitrum Sepolia"
+        );
+
         address deployer = vm.envAddress("DEPLOYER_ADDRESS");
         address owner = vm.envAddress("SEPEHR_OWNER");
         address pauseGuardian = vm.envAddress("SEPEHR_PAUSE_GUARDIAN");
