@@ -159,11 +159,29 @@ contract E2ELocalDeploy is Script {
                 "setAssetOracle(address,address,uint256)", usdc, address(usdcOracle), uint256(86_400)
             )
         );
+        {
+            address wbtc = vm.envOr("WBTC_ADDRESS", address(0));
+            if (wbtc != address(0)) {
+                _tlExec(
+                    deployer,
+                    timelock,
+                    address(core),
+                    abi.encodeWithSignature(
+                        "setAssetOracle(address,address,uint256)", wbtc, address(btcOracle), uint256(86_400)
+                    )
+                );
+            }
+        }
 
         console.log("E2E_DEPLOY_COMPLETE");
     }
 
-    function _tlExec(address sender, TimelockController tl, address target, bytes memory data) internal {
+    function _tlExec(
+        address sender,
+        TimelockController tl,
+        address target,
+        bytes memory data
+    ) internal {
         vm.startBroadcast(sender);
         tl.schedule(target, 0, data, bytes32(0), bytes32(0), 0);
         tl.execute(target, 0, data, bytes32(0), bytes32(0));
