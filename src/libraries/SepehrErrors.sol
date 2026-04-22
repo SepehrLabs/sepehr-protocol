@@ -10,6 +10,14 @@ library SepehrErrors {
 
     error ContractPaused();
 
+    /// @notice Reverts every SepehrCore entry-point (mutative + user-state views) whenever
+    /// `block.chainid` differs from the `expectedChainId` captured at construction. V1 pivots
+    /// mono-Arbitrum so a contract deployed on the wrong chain (including via an EVM-compatible
+    /// rollup misconfiguration) is fully inert instead of half-alive. See ADR-0011.
+    /// @param expected The chain ID authorized for this contract instance.
+    /// @param actual The chain ID reported by the current transaction's EVM context.
+    error WrongChain(uint256 expected, uint256 actual);
+
     error CooldownActive(uint256 remaining);
     error HealthFactorAboveThreshold(uint256 current, uint256 threshold);
     error MaxRepayExceeded(uint256 requested, uint256 maxAllowed);

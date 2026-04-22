@@ -16,15 +16,9 @@ import {MockFlashLoan} from "../../src/mocks/MockFlashLoan.sol";
 import {MockChainlinkAggregator} from "../helpers/MockChainlinkAggregator.sol";
 
 contract MockERC20 is ERC20 {
-    constructor(
-        string memory name_,
-        string memory symbol_
-    ) ERC20(name_, symbol_) {}
+    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
 
-    function mint(
-        address to,
-        uint256 amount
-    ) external {
+    function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
 }
@@ -67,7 +61,7 @@ contract SepehrCoreTriggersTest is Test {
 
         // A7 gate intentionally disabled (0) for trigger-path tests; the gate is exercised
         // separately in the Admin and Subscriptions suites where it is load-bearing.
-        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 0, type(uint256).max);
+        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 0, type(uint256).max, block.chainid);
 
         vm.startPrank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
@@ -844,9 +838,7 @@ contract SepehrCoreTriggersTest is Test {
     /// @dev Internal helper — wires a fresh SequentialMockAdapter under `seqKey`,
     /// enables alice's protection against it, and funds the DEX + adapter so a
     /// collateral→debt swap is possible. Keeps each D2 test self-contained.
-    function _setupForSwap(
-        bytes32 seqKey
-    ) internal {
+    function _setupForSwap(bytes32 seqKey) internal {
         SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
         seqAdapter.setDelegation(alice, true);
 
@@ -1099,69 +1091,42 @@ contract SequentialMockAdapter {
     uint256 public currentHF;
     uint256 public postRepayHF;
 
-    constructor(
-        uint256 _initialHF,
-        uint256 _postRepayHF
-    ) {
+    constructor(uint256 _initialHF, uint256 _postRepayHF) {
         currentHF = _initialHF;
         postRepayHF = _postRepayHF;
     }
 
-    function reset(
-        uint256 _initialHF,
-        uint256 _postRepayHF
-    ) external {
+    function reset(uint256 _initialHF, uint256 _postRepayHF) external {
         currentHF = _initialHF;
         postRepayHF = _postRepayHF;
     }
 
-    function setDelegation(
-        address user,
-        bool delegated
-    ) external {
+    function setDelegation(address user, bool delegated) external {
         delegations[user] = delegated;
     }
 
-    function getHealthFactor(
-        address
-    ) external view returns (uint256) {
+    function getHealthFactor(address) external view returns (uint256) {
         return currentHF;
     }
 
-    function checkDelegation(
-        address user
-    ) external view returns (bool) {
+    function checkDelegation(address user) external view returns (bool) {
         return delegations[user];
     }
 
-    function repay(
-        address,
-        address debtAsset,
-        uint256 amount
-    ) external {
+    function repay(address, address debtAsset, uint256 amount) external {
         ERC20(debtAsset).transfer(address(0xdead), amount);
         currentHF = postRepayHF;
     }
 
-    function withdrawCollateral(
-        address,
-        address collateralAsset,
-        uint256 amount,
-        address recipient
-    ) external {
+    function withdrawCollateral(address, address collateralAsset, uint256 amount, address recipient) external {
         ERC20(collateralAsset).transfer(recipient, amount);
     }
 
-    function getCollateralValueUsd(
-        address
-    ) external pure returns (uint256) {
+    function getCollateralValueUsd(address) external pure returns (uint256) {
         return 10_000e8; // $10k — below Shield tier cap ($15k) so execute() passes H01 check
     }
 
-    function getDebt(
-        address,
-        address
-    ) external pure returns (uint256) {
+    function getDebt(address, address) external pure returns (uint256) {
         return 0;
     }
 }

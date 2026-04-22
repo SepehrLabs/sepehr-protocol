@@ -53,7 +53,25 @@ fork_block_number = 0
 eth_rpc_url = "${RPC_ARBITRUM_PRIMARY_HTTP}"
 fork_block_number = 0
 
+[profile.fork-arbitrum-sepolia]
+eth_rpc_url = "${RPC_ARBITRUM_SEPOLIA_PRIMARY_HTTP}"
+fork_block_number = 0
+
 [invariant]
 runs = 256
 depth = 30
 fail_on_revert = false
+
+# ADR-0011: V1 mono-Arbitrum. Deploy scripts resolve --rpc-url by key against these
+# endpoints, so `forge script script/DeployCore.s.sol --rpc-url arbitrum-sepolia --broadcast`
+# picks up RPC_ARBITRUM_SEPOLIA_PRIMARY_HTTP from the environment.
+[rpc_endpoints]
+arbitrum-one = "${RPC_ARBITRUM_PRIMARY_HTTP}"
+arbitrum-sepolia = "${RPC_ARBITRUM_SEPOLIA_PRIMARY_HTTP}"
+
+# Arbiscan covers both Arbitrum One and Arbitrum Sepolia under a single V2 API key.
+# `forge script ... --verify --etherscan-api-key $ARBISCAN_API_KEY --chain arbitrum-sepolia`
+# resolves through this section.
+[etherscan]
+arbitrum-one = { key = "${ARBISCAN_API_KEY}", chain = 42161, url = "https://api.arbiscan.io/api" }
+arbitrum-sepolia = { key = "${ARBISCAN_API_KEY}", chain = 421614, url = "https://api-sepolia.arbiscan.io/api" }

@@ -11,15 +11,9 @@ import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
 import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
 
 contract MockERC20 is ERC20 {
-    constructor(
-        string memory name_,
-        string memory symbol_
-    ) ERC20(name_, symbol_) {}
+    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
 
-    function mint(
-        address to,
-        uint256 amount
-    ) external {
+    function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
 
@@ -51,7 +45,7 @@ contract SepehrCoreSubscriptionsTest is Test {
     function setUp() public {
         usdc = new MockERC20("USD Coin", "USDC");
 
-        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 500e8, type(uint256).max);
+        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 500e8, type(uint256).max, block.chainid);
 
         usdc.mint(alice, 10_000e6);
         usdc.mint(bob, 10_000e6);

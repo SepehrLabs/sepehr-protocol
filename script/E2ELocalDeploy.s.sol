@@ -49,7 +49,8 @@ contract E2ELocalDeploy is Script {
         address[] memory executors = new address[](1);
         executors[0] = deployer;
         TimelockController timelock = new TimelockController(0, proposers, executors, address(0));
-        SepehrCore core = new SepehrCore(deployer, address(timelock), deployer, usdc, 0, type(uint256).max);
+        SepehrCore core =
+            new SepehrCore(deployer, address(timelock), deployer, usdc, 0, type(uint256).max, block.chainid);
         console.log("TIMELOCK", address(timelock));
         console.log("CORE", address(core));
 
@@ -162,12 +163,7 @@ contract E2ELocalDeploy is Script {
         console.log("E2E_DEPLOY_COMPLETE");
     }
 
-    function _tlExec(
-        address sender,
-        TimelockController tl,
-        address target,
-        bytes memory data
-    ) internal {
+    function _tlExec(address sender, TimelockController tl, address target, bytes memory data) internal {
         vm.startBroadcast(sender);
         tl.schedule(target, 0, data, bytes32(0), bytes32(0), 0);
         tl.execute(target, 0, data, bytes32(0), bytes32(0));

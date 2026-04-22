@@ -33,7 +33,7 @@ contract SepehrCoreInvariantTest is Test {
         flashLoan = new MockFlashLoan();
         dex = new MockDex();
 
-        core = new SepehrCore(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max);
+        core = new SepehrCore(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max, block.chainid);
 
         vm.startPrank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));

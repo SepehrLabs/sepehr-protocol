@@ -14,15 +14,9 @@ import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockChainlinkAggregator} from "../helpers/MockChainlinkAggregator.sol";
 
 contract MockERC20 is ERC20 {
-    constructor(
-        string memory name_,
-        string memory symbol_
-    ) ERC20(name_, symbol_) {}
+    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
 
-    function mint(
-        address to,
-        uint256 amount
-    ) external {
+    function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
 }
@@ -43,7 +37,7 @@ contract SepehrCoreAdminTest is Test {
         adapter = new MockAdapter();
         usdc = new MockERC20("USD Coin", "USDC");
 
-        core = new SepehrCore(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max);
+        core = new SepehrCore(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max, block.chainid);
     }
 
     // ─── addAdapter ─────────────────────────────────────────────
@@ -711,17 +705,17 @@ contract SepehrCoreAdminTest is Test {
 
     function test_constructor_revertsOnZeroTimelock() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, address(0), guardian, address(usdc), 500e8, type(uint256).max);
+        new SepehrCore(owner, address(0), guardian, address(usdc), 500e8, type(uint256).max, block.chainid);
     }
 
     function test_constructor_revertsOnZeroGuardian() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, timelock, address(0), address(usdc), 500e8, type(uint256).max);
+        new SepehrCore(owner, timelock, address(0), address(usdc), 500e8, type(uint256).max, block.chainid);
     }
 
     function test_constructor_revertsOnZeroUsdc() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, timelock, guardian, address(0), 500e8, type(uint256).max);
+        new SepehrCore(owner, timelock, guardian, address(0), 500e8, type(uint256).max, block.chainid);
     }
 
     function test_constructor_setsInitialValues() public {
@@ -730,6 +724,18 @@ contract SepehrCoreAdminTest is Test {
         assertEq(core.minCollateralUsd(), 500e8);
         assertEq(address(core.usdc()), address(usdc));
         assertEq(core.owner(), owner);
+        assertEq(core.expectedChainId(), block.chainid);
+    }
+
+    function test_constructor_revertsOnZeroExpectedChainId() public {
+        vm.expectRevert(SepehrErrors.ZeroAmount.selector);
+        new SepehrCore(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max, 0);
+    }
+
+    function test_constructor_revertsOnWrongChainId() public {
+        uint256 fakeChainId = block.chainid + 1;
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.WrongChain.selector, fakeChainId, block.chainid));
+        new SepehrCore(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max, fakeChainId);
     }
 
     // ─── setMinCollateralUsd (A7) ───────────────────────────────
@@ -1084,15 +1090,11 @@ contract SepehrCoreAdminTest is Test {
         core.renounceOwnership();
     }
 
-    function _readAssetOracle(
-        address asset
-    ) internal view returns (address agg, uint256 stale) {
+    function _readAssetOracle(address asset) internal view returns (address agg, uint256 stale) {
         (agg, stale) = _callAssetOracles(asset);
     }
 
-    function _callAssetOracles(
-        address asset
-    ) internal view returns (address agg, uint256 stale) {
+    function _callAssetOracles(address asset) internal view returns (address agg, uint256 stale) {
         (bool ok, bytes memory ret) = address(core).staticcall(abi.encodeWithSignature("assetOracles(address)", asset));
         require(ok, "assetOracles call failed");
         (agg, stale) = abi.decode(ret, (address, uint256));

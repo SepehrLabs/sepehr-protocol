@@ -11,15 +11,9 @@ import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 
 contract MockERC20 is ERC20 {
-    constructor(
-        string memory name_,
-        string memory symbol_
-    ) ERC20(name_, symbol_) {}
+    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
 
-    function mint(
-        address to,
-        uint256 amount
-    ) external {
+    function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
 
@@ -60,7 +54,7 @@ contract SepehrCoreTvlCapTest is Test {
         adapter = new MockAdapter();
         usdc = new MockERC20("USD Coin", "USDC");
 
-        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 0, TVL_CAP_75K_USD8);
+        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 0, TVL_CAP_75K_USD8, block.chainid);
 
         vm.prank(timelock);
         core.addAdapter(PROTOCOL_KEY_AAVE, address(adapter));

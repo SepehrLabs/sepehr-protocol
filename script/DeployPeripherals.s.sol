@@ -16,7 +16,23 @@ import {BalancerFlashLoanProvider} from "../src/flash/BalancerFlashLoanProvider.
 import {UniswapV3FlashLoanProvider} from "../src/flash/UniswapV3FlashLoanProvider.sol";
 
 contract DeployPeripherals is Script {
+    /// @notice Arbitrum One.
+    uint256 internal constant ARBITRUM_ONE_CHAIN_ID = 42_161;
+    /// @notice Arbitrum Sepolia (public testnet).
+    uint256 internal constant ARBITRUM_SEPOLIA_CHAIN_ID = 421_614;
+
     function run() external {
+        // ADR-0011: V1 is a mono-Arbitrum deploy. Peripherals (adapters, flash providers,
+        // DEX routers) are intentionally generic — they compile and run on every supported
+        // chain so we keep audit coverage on them — but the *deploy script* still refuses
+        // any target other than Arbitrum One or Sepolia. Pairing peripherals with a core
+        // on the wrong chain would produce a half-alive system that can't be executed
+        // against.
+        require(
+            block.chainid == ARBITRUM_ONE_CHAIN_ID || block.chainid == ARBITRUM_SEPOLIA_CHAIN_ID,
+            "DeployPeripherals: only Arbitrum One or Arbitrum Sepolia"
+        );
+
         address deployer = vm.envAddress("DEPLOYER_ADDRESS");
         address coreAddr = vm.envAddress("SEPEHR_CORE");
 
