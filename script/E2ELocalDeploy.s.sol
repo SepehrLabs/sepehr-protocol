@@ -7,6 +7,8 @@ import {Script, console} from "forge-std/Script.sol";
 import {SepehrCore} from "../src/SepehrCore.sol";
 import {AaveV3Adapter} from "../src/adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../src/adapters/CompoundV3Adapter.sol";
+import {EulerV2Adapter} from "../src/adapters/EulerV2Adapter.sol";
+import {MorphoBlueAdapter} from "../src/adapters/MorphoBlueAdapter.sol";
 import {UniswapV3Router} from "../src/dex/UniswapV3Router.sol";
 import {AaveFlashLoanProvider} from "../src/flash/AaveFlashLoanProvider.sol";
 import {BalancerFlashLoanProvider} from "../src/flash/BalancerFlashLoanProvider.sol";
@@ -29,12 +31,20 @@ import {MockChainlinkAggregator} from "../test/helpers/MockChainlinkAggregator.s
 ///   PROTOCOL_KEY_AAVE   — bytes32 protocol key for the Aave adapter registry entry
 ///
 /// Optional (each one gated — absent = skip):
-///   COMPOUND_V3_COMET   — Compound v3 USDC comet
-///   PROTOCOL_KEY_COMP   — bytes32 key for the Compound adapter entry
-///   BALANCER_VAULT      — Balancer vault address
-///   UNIV3_FLASH_POOL    — concrete Uniswap v3 pool used as flash source
-///   UNIV3_SWAP_ROUTER   — Uniswap v3 SwapRouter
-///   UNIV3_FACTORY       — Uniswap v3 factory
+///   COMPOUND_V3_COMET        — Compound v3 USDC comet
+///   PROTOCOL_KEY_COMP        — bytes32 key for the Compound adapter entry
+///   MORPHO_SINGLETON_ADDRESS — Morpho Blue singleton on the forked chain
+///   MORPHO_MARKET_ID         — bytes32 marketId the adapter will be bound to
+///   PROTOCOL_KEY_MORPHO      — bytes32 key for the Morpho Blue adapter entry
+///   EULER_VAULT_ADDRESS      — Euler V2 debt vault (controller) the adapter binds to
+///   EULER_EVC_ADDRESS        — Euler Vault Connector on the forked chain
+///   EULER_VAULT_ORACLE       — Euler oracle router used for BASE_ASSET quoting
+///   EULER_BASE_ASSET         — debt asset (must match vault.asset() for correct repay)
+///   PROTOCOL_KEY_EULER       — bytes32 key for the Euler V2 adapter entry
+///   BALANCER_VAULT           — Balancer vault address
+///   UNIV3_FLASH_POOL         — concrete Uniswap v3 pool used as flash source
+///   UNIV3_SWAP_ROUTER        — Uniswap v3 SwapRouter
+///   UNIV3_FACTORY            — Uniswap v3 factory
 contract E2ELocalDeploy is Script {
     function run() external {
         address deployer = vm.envAddress("DEPLOYER_ADDRESS");
@@ -74,6 +84,31 @@ contract E2ELocalDeploy is Script {
             if (comet != address(0)) {
                 compAdapter = address(new CompoundV3Adapter(comet, address(core)));
                 console.log("ADAPTER_COMPOUND_V3", compAdapter);
+            }
+        }
+
+        address morphoAdapter;
+        {
+            address morphoSingleton = vm.envOr("MORPHO_SINGLETON_ADDRESS", address(0));
+            bytes32 morphoMarketId = vm.envOr("MORPHO_MARKET_ID", bytes32(0));
+            if (morphoSingleton != address(0) && morphoMarketId != bytes32(0)) {
+                morphoAdapter = address(new MorphoBlueAdapter(morphoSingleton, morphoMarketId, address(core)));
+                console.log("ADAPTER_MORPHO_BLUE", morphoAdapter);
+            }
+        }
+
+        address eulerAdapter;
+        {
+            address eulerVault = vm.envOr("EULER_VAULT_ADDRESS", address(0));
+            address eulerEvc = vm.envOr("EULER_EVC_ADDRESS", address(0));
+            address eulerOracle = vm.envOr("EULER_VAULT_ORACLE", address(0));
+            address eulerBase = vm.envOr("EULER_BASE_ASSET", address(0));
+            if (
+                eulerVault != address(0) && eulerEvc != address(0) && eulerOracle != address(0)
+                    && eulerBase != address(0)
+            ) {
+                eulerAdapter = address(new EulerV2Adapter(eulerVault, eulerEvc, eulerOracle, eulerBase, address(core)));
+                console.log("ADAPTER_EULER_V2", eulerAdapter);
             }
         }
 
@@ -121,6 +156,24 @@ contract E2ELocalDeploy is Script {
                 timelock,
                 address(core),
                 abi.encodeWithSignature("addAdapter(bytes32,address)", compKey, compAdapter)
+            );
+        }
+        if (morphoAdapter != address(0)) {
+            bytes32 morphoKey = vm.envBytes32("PROTOCOL_KEY_MORPHO");
+            _tlExec(
+                deployer,
+                timelock,
+                address(core),
+                abi.encodeWithSignature("addAdapter(bytes32,address)", morphoKey, morphoAdapter)
+            );
+        }
+        if (eulerAdapter != address(0)) {
+            bytes32 eulerKey = vm.envBytes32("PROTOCOL_KEY_EULER");
+            _tlExec(
+                deployer,
+                timelock,
+                address(core),
+                abi.encodeWithSignature("addAdapter(bytes32,address)", eulerKey, eulerAdapter)
             );
         }
         _tlExec(deployer, timelock, address(core), abi.encodeWithSignature("addKeeper(address)", keeper));
