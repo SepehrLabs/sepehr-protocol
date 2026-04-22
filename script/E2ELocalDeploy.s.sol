@@ -7,6 +7,7 @@ import {Script, console} from "forge-std/Script.sol";
 import {SepehrCore} from "../src/SepehrCore.sol";
 import {AaveV3Adapter} from "../src/adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../src/adapters/CompoundV3Adapter.sol";
+import {MorphoBlueAdapter} from "../src/adapters/MorphoBlueAdapter.sol";
 import {UniswapV3Router} from "../src/dex/UniswapV3Router.sol";
 import {AaveFlashLoanProvider} from "../src/flash/AaveFlashLoanProvider.sol";
 import {BalancerFlashLoanProvider} from "../src/flash/BalancerFlashLoanProvider.sol";
@@ -29,12 +30,15 @@ import {MockChainlinkAggregator} from "../test/helpers/MockChainlinkAggregator.s
 ///   PROTOCOL_KEY_AAVE   — bytes32 protocol key for the Aave adapter registry entry
 ///
 /// Optional (each one gated — absent = skip):
-///   COMPOUND_V3_COMET   — Compound v3 USDC comet
-///   PROTOCOL_KEY_COMP   — bytes32 key for the Compound adapter entry
-///   BALANCER_VAULT      — Balancer vault address
-///   UNIV3_FLASH_POOL    — concrete Uniswap v3 pool used as flash source
-///   UNIV3_SWAP_ROUTER   — Uniswap v3 SwapRouter
-///   UNIV3_FACTORY       — Uniswap v3 factory
+///   COMPOUND_V3_COMET        — Compound v3 USDC comet
+///   PROTOCOL_KEY_COMP        — bytes32 key for the Compound adapter entry
+///   MORPHO_SINGLETON_ADDRESS — Morpho Blue singleton on the forked chain
+///   MORPHO_MARKET_ID         — bytes32 marketId the adapter will be bound to
+///   PROTOCOL_KEY_MORPHO      — bytes32 key for the Morpho Blue adapter entry
+///   BALANCER_VAULT           — Balancer vault address
+///   UNIV3_FLASH_POOL         — concrete Uniswap v3 pool used as flash source
+///   UNIV3_SWAP_ROUTER        — Uniswap v3 SwapRouter
+///   UNIV3_FACTORY            — Uniswap v3 factory
 contract E2ELocalDeploy is Script {
     function run() external {
         address deployer = vm.envAddress("DEPLOYER_ADDRESS");
@@ -74,6 +78,16 @@ contract E2ELocalDeploy is Script {
             if (comet != address(0)) {
                 compAdapter = address(new CompoundV3Adapter(comet, address(core)));
                 console.log("ADAPTER_COMPOUND_V3", compAdapter);
+            }
+        }
+
+        address morphoAdapter;
+        {
+            address morphoSingleton = vm.envOr("MORPHO_SINGLETON_ADDRESS", address(0));
+            bytes32 morphoMarketId = vm.envOr("MORPHO_MARKET_ID", bytes32(0));
+            if (morphoSingleton != address(0) && morphoMarketId != bytes32(0)) {
+                morphoAdapter = address(new MorphoBlueAdapter(morphoSingleton, morphoMarketId, address(core)));
+                console.log("ADAPTER_MORPHO_BLUE", morphoAdapter);
             }
         }
 
@@ -123,6 +137,15 @@ contract E2ELocalDeploy is Script {
                 abi.encodeWithSignature("addAdapter(bytes32,address)", compKey, compAdapter)
             );
         }
+        if (morphoAdapter != address(0)) {
+            bytes32 morphoKey = vm.envBytes32("PROTOCOL_KEY_MORPHO");
+            _tlExec(
+                deployer,
+                timelock,
+                address(core),
+                abi.encodeWithSignature("addAdapter(bytes32,address)", morphoKey, morphoAdapter)
+            );
+        }
         _tlExec(deployer, timelock, address(core), abi.encodeWithSignature("addKeeper(address)", keeper));
         _tlExec(
             deployer,
@@ -159,11 +182,29 @@ contract E2ELocalDeploy is Script {
                 "setAssetOracle(address,address,uint256)", usdc, address(usdcOracle), uint256(86_400)
             )
         );
+        {
+            address wbtc = vm.envOr("WBTC_ADDRESS", address(0));
+            if (wbtc != address(0)) {
+                _tlExec(
+                    deployer,
+                    timelock,
+                    address(core),
+                    abi.encodeWithSignature(
+                        "setAssetOracle(address,address,uint256)", wbtc, address(btcOracle), uint256(86_400)
+                    )
+                );
+            }
+        }
 
         console.log("E2E_DEPLOY_COMPLETE");
     }
 
-    function _tlExec(address sender, TimelockController tl, address target, bytes memory data) internal {
+    function _tlExec(
+        address sender,
+        TimelockController tl,
+        address target,
+        bytes memory data
+    ) internal {
         vm.startBroadcast(sender);
         tl.schedule(target, 0, data, bytes32(0), bytes32(0), 0);
         tl.execute(target, 0, data, bytes32(0), bytes32(0));
