@@ -1,0 +1,15 @@
+{
+  "aaveAdapter": "0x2FcfF4a6818a749F10B5bD1667fdC8d272c5c950",
+  "aaveFlash": "0x300f3b3A9Fe1FD9e623F8C95e67d73cb6DfD7f0c",
+  "aaveKey": "0x2205ba6277ac479d17179eec08f59c78bb6b324086f0b126f0ce6d309cc49835",
+  "chainId": 421614,
+  "core": "0x43EFc78e0753D6aA2D70bcE9Ff848719e081C162",
+  "earliestExecuteTimestamp": 1776934582,
+  "ethOracle": "0xfd3ad9F6c8E66275d5dA52313BEa2C3EfBe696A3",
+  "keeper": "0xCcF0f137D3ebf489096C7ae2E57bb76072702e24",
+  "scheduleBlock": 10715430,
+  "timelock": "0x15EF2cbff476be9298B4E0448Dc762f6c9bAFFbF",
+  "timelockDelaySeconds": 300,
+  "usdc": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+  "usdcOracle": "0x0Cd4fBFE4788181af60fb9515A7EEe7C24557f7e"
+}
