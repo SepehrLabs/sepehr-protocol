@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
 import {IChainlinkAggregator} from "../../src/interfaces/external/IChainlinkAggregator.sol";
