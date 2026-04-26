@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: GPL-2.0-or-later
 pragma solidity ^0.8.28;
 
 /// @notice Minimal Uniswap V2 Router interface (also covers SushiSwap, PancakeSwap, etc.).

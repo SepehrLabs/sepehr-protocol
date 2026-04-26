@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
 /// @notice Basis-point (bps) arithmetic. 1 bps = 0.01%, 10_000 bps = 100%.
