@@ -82,10 +82,10 @@ contract DeployTestnetArbitrumSepolia is Script {
         AaveFlashLoanProvider aaveFlash = new AaveFlashLoanProvider(aavePool, address(timelock));
         console.log("FLASH_AAVE", address(aaveFlash));
 
-        // 5. Mock Chainlink oracles (static prices). The testnet flow Jean-Roch
-        //    cares about (Subscribe Shield) doesn't read oracles, but a mock
-        //    USDC/ETH pair lets tier-cap pre-flight succeed if he later opens a
-        //    position. Mainnet uses Chainlink feeds — documented deviation.
+        // 5. Mock Chainlink oracles (static prices). The Subscribe Shield
+        //    testnet flow doesn't read oracles, but a mock USDC/ETH pair lets
+        //    tier-cap pre-flight succeed once a position is opened. Mainnet
+        //    uses Chainlink feeds — documented deviation.
         uint256 ethPrice = vm.envOr("MOCK_ETH_PRICE_USD_8", uint256(300_000_000_000)); // $3000 * 1e8
         uint256 usdcPrice = vm.envOr("MOCK_USDC_PRICE_USD_8", uint256(100_000_000)); // $1 * 1e8
         MockChainlinkAggregator ethOracle = new MockChainlinkAggregator(8, int256(ethPrice));
