@@ -4,6 +4,8 @@ cache/
 broadcast/
 lib/
 forge-cache/
+foundry.lock
+.gitmodules
 
 # ─── Environment / secrets ────────────────────────────────
 .env
