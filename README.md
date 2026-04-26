@@ -1,53 +1,98 @@
-# Sepehr Contracts
+# Sepehr Protocol — Contracts
 
 Solidity smart contracts for the Sepehr liquidation protection protocol.
+
+Sepehr is a non-custodial protocol that monitors lending positions and
+executes flash-loan-backed repayments when a user-defined health
+factor threshold is breached. Users delegate authority to a flash
+rescue path; Sepehr never custodies collateral.
+
+## Scope
+
+**V1 mainnet:** Arbitrum One (chain id `42161`). Testnet: Arbitrum
+Sepolia (chain id `421614`). Three adapters are registered via
+`SepehrCore.addAdapter` in V1: Aave V3, Compound V3, Morpho Blue.
+
+**Compiled but not registered in V1:** Aave V4, Euler V2, Maker, Spark,
+Seamless. These remain in the audit surface and are exercised by unit
+and fork tests, but are not callable through `SepehrCore` until V2.
 
 ## Contracts
 
 | Contract | Description |
 |----------|-------------|
-| `SepehrCore.sol` | Subscription management, protection config, trigger execution |
-| `SepehrTimelock.sol` | Time-locked admin operations |
+| `src/SepehrCore.sol` | Subscription management, protection config, trigger execution |
+| `src/SepehrTimelock.sol` | OpenZeppelin TimelockController wrapper for admin operations |
 
-### Protocol Adapters
-Aave V3, Aave V4, Compound V3, Morpho Blue, Euler V2, Maker, Spark, Seamless
+### Protocol adapters (`src/adapters/`)
 
-### Flash Loan Providers
-Aave, Balancer, Uniswap V3
+Aave V3, Aave V4, Compound V3, Morpho Blue, Euler V2, Maker, Spark,
+Seamless. All implement `IProtocolAdapter`.
 
-### DEX Routers
-Uniswap V3, Uniswap V2 forks, Velodrome, Camelot, Trader Joe V2.2
+### Flash loan providers (`src/flash/`)
 
-## Commands
+Aave, Balancer, Uniswap V3. All implement `IFlashLoanProvider`.
+
+### DEX routers (`src/dex/`)
+
+Uniswap V3, Uniswap V2 forks, Velodrome, Camelot, Trader Joe V2.2.
+All implement `IDexRouter`.
+
+## Build and test
 
 ```bash
-forge build              # Compile
-forge test -vv           # Run all tests
+forge install            # Fetch forge-std and openzeppelin-contracts
+forge build              # Compile (Solidity 0.8.28, via_ir, Cancun)
+forge test -vv           # Unit + fork + invariant tests
 forge fmt                # Format
 forge fmt --check        # Check formatting (CI)
 ```
 
-## Deployment
+Fork tests require RPC endpoints. Set `RPC_ARBITRUM_PRIMARY_HTTP` and
+`RPC_ARBITRUM_SEPOLIA_PRIMARY_HTTP` in `.env`.
 
-```bash
-source ../.env
-forge script script/DeployCore.s.sol \
-  --rpc-url $RPC_ETHEREUM_PRIMARY_HTTP \
-  --broadcast --verify
-```
-
-## Test Structure
+## Test structure
 
 ```
 test/
-├── unit/           # Unit tests with mock contracts
-│   ├── SepehrCore.Admin.t.sol
-│   ├── SepehrCore.Subscriptions.t.sol
-│   ├── SepehrCore.Triggers.t.sol
-│   ├── adapters/   # Per-adapter unit tests
-│   ├── dex/        # DEX router tests
-│   ├── flash/      # Flash provider tests
-│   └── libraries/  # Math library tests
-├── fork/           # Fork tests against mainnet protocols
-└── invariant/      # Invariant/fuzz testing
+├── unit/         # Mock-based unit tests
+├── fork/         # Fork tests against live protocols
+├── invariant/    # Stateful fuzzing
+├── integration/  # Cross-contract integration scenarios
+└── helpers/      # Mock contracts and test utilities
 ```
+
+## Deployment
+
+V1 deploy scripts abort on any chain id other than Arbitrum One
+(42161) or Arbitrum Sepolia (421614).
+
+```bash
+source .env
+forge script script/DeployCore.s.sol \
+  --rpc-url $RPC_ARBITRUM_SEPOLIA_PRIMARY_HTTP \
+  --broadcast --verify
+```
+
+## Audit
+
+External audit pending. Internal review complete. Deployments are
+governed by a 48-hour `TimelockController`.
+
+## Licensing
+
+| Path | License |
+|------|---------|
+| `src/SepehrCore.sol`, `src/SepehrTimelock.sol`, `src/adapters/`, `src/dex/`, `src/flash/` | [BUSL 1.1](LICENSE) → MIT on 2030-04-21 |
+| `src/libraries/`, `src/mocks/` | MIT |
+| `src/interfaces/` | GPL-2.0-or-later |
+| `test/`, `script/` | MIT |
+
+For Additional Use Grants under BUSL 1.1, see
+[`docs/legal/additional-use-grants.md`](docs/legal/additional-use-grants.md).
+
+## Security
+
+Report vulnerabilities to **security@sepehr.app** (PGP key at
+[`docs/security/sepehr-pgp.asc`](docs/security/sepehr-pgp.asc)).
+See [`SECURITY.md`](SECURITY.md) for full policy and scope.

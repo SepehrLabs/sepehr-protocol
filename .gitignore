@@ -1,0 +1,24 @@
+# ─── Foundry ───────────────────────────────────────────────
+out/
+cache/
+broadcast/
+lib/
+forge-cache/
+
+# ─── Environment / secrets ────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ─── Editors / OS ─────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── Logs ─────────────────────────────────────────────────
+*.log

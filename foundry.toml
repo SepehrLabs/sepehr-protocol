@@ -14,7 +14,6 @@ ast = true
 extra_output = ["abi", "evm.bytecode"]
 extra_output_files = ["abi"]
 fs_permissions = [
-    { access = "read", path = "../shared/config" },
     { access = "read-write", path = "./deployments" },
 ]
 remappings = [
