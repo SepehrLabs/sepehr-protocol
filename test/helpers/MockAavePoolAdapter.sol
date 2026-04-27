@@ -5,7 +5,7 @@ import {IAavePool} from "../../src/interfaces/external/IAavePool.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @notice Mock Aave Pool that implements getUserAccountData, repay, and withdraw
-///         for unit-testing AaveV3Adapter and AaveV4Adapter.
+///         for unit-testing AaveV3Adapter.
 contract MockAavePoolAdapter is IAavePool {
     struct AccountData {
         uint256 totalCollateralBase;

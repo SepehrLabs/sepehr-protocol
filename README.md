@@ -11,11 +11,8 @@ rescue path; Sepehr never custodies collateral.
 
 **V1 mainnet:** Arbitrum One (chain id `42161`). Testnet: Arbitrum
 Sepolia (chain id `421614`). Three adapters are registered via
-`SepehrCore.addAdapter` in V1: Aave V3, Compound V3, Morpho Blue.
-
-**Compiled but not registered in V1:** Aave V4, Euler V2, Maker, Spark,
-Seamless. These remain in the audit surface and are exercised by unit
-and fork tests, but are not callable through `SepehrCore` until V2.
+`SepehrCore.addAdapter` in V1 and constitute the entire active
+protocol surface: Aave V3, Compound V3, Morpho Blue.
 
 ## Contracts
 
@@ -26,8 +23,7 @@ and fork tests, but are not callable through `SepehrCore` until V2.
 
 ### Protocol adapters (`src/adapters/`)
 
-Aave V3, Aave V4, Compound V3, Morpho Blue, Euler V2, Maker, Spark,
-Seamless. All implement `IProtocolAdapter`.
+Aave V3, Compound V3, Morpho Blue. All implement `IProtocolAdapter`.
 
 ### Flash loan providers (`src/flash/`)
 
@@ -37,6 +33,13 @@ Aave, Balancer, Uniswap V3. All implement `IFlashLoanProvider`.
 
 Uniswap V3, Uniswap V2 forks, Velodrome, Camelot, Trader Joe V2.2.
 All implement `IDexRouter`.
+
+### Mocks (`src/mocks/`, `test/helpers/Mock*.sol`)
+
+Test utilities used to exercise the protocol in isolation. They are
+not part of the production deployment and are explicitly out of
+scope for any external audit, per standard DeFi convention (cf.
+Morpho Blue, Aave V3 Core).
 
 ## Build and test
 

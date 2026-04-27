@@ -30,14 +30,21 @@ We commit to:
 ## Scope
 
 In scope:
-- Smart contracts under `contracts/src/` (SepehrCore, 
-  SepehrTimelock, adapters, libraries, interfaces)
-- Off-chain keeper logic under `keeper/`
-- The website https://sepehr.app and its API routes
+- Smart contracts under `src/` (SepehrCore, SepehrTimelock, the 
+  three V1-registered adapters, libraries, interfaces, DEX 
+  routers, flash loan providers)
+- Deployment scripts under `script/` insofar as they affect on-chain 
+  state of the V1 deployment
 
 Out of scope:
+- Mock contracts (`src/mocks/`, `test/helpers/Mock*.sol`) — these 
+  are test utilities, not production code, per standard DeFi audit 
+  convention (cf. Morpho Blue, Aave V3 Core)
 - Third-party protocols (Aave V3, Compound V3, Morpho Blue, 
   Arbitrum) — please report directly to those teams
+- Off-chain components (keeper, frontend, extension) — these live 
+  in a separate private monorepo and have their own security 
+  process
 - Phishing or social engineering against Sepehr team or users
 - Code in `audit/` branches not deployed to production
 
