@@ -80,10 +80,6 @@ interface ISepehrCore {
     // ─── Keeper Actions ──────────────────────────────────────────
 
     /// @notice Execute a liquidation-protection trigger.
-    /// @dev A15: the USD value credited to `saveCredits[user]` is computed on-chain from the
-    /// registered debt-asset oracle rather than being taken from the keeper, so a misbehaving
-    /// keeper cannot inflate or suppress the user-facing "money saved" metric. If no debt-asset
-    /// oracle is registered, the trigger still succeeds but no save credit is accrued.
     /// @param user The user to protect.
     /// @param protocolKey The protocol key.
     /// @param debtAsset The debt token to repay.
@@ -117,8 +113,4 @@ interface ISepehrCore {
     function isKeeper(
         address addr
     ) external view returns (bool);
-
-    function getSaveCredits(
-        address user
-    ) external view returns (uint256);
 }

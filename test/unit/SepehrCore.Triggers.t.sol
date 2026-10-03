@@ -16,9 +16,15 @@ import {MockFlashLoan} from "../../src/mocks/MockFlashLoan.sol";
 import {MockChainlinkAggregator} from "../helpers/MockChainlinkAggregator.sol";
 
 contract MockERC20 is ERC20 {
-    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
+    constructor(
+        string memory name_,
+        string memory symbol_
+    ) ERC20(name_, symbol_) {}
 
-    function mint(address to, uint256 amount) external {
+    function mint(
+        address to,
+        uint256 amount
+    ) external {
         _mint(to, amount);
     }
 }
@@ -40,7 +46,6 @@ contract SepehrCoreTriggersTest is Test {
 
     bytes32 public constant PROTOCOL_KEY = keccak256("AAVE_V3");
     uint256 public constant REPAY_AMOUNT = 1000e18;
-    uint256 public constant REPAY_VALUE_USD6 = 1000e6;
     uint256 public constant HF_BELOW_THRESHOLD = 1.1e18;
     uint256 public constant HF_ABOVE_THRESHOLD = 1.5e18;
     uint256 public constant THRESHOLD_HF = 1.3e18;
@@ -95,16 +100,6 @@ contract SepehrCoreTriggersTest is Test {
         address[] memory providers = new address[](1);
         providers[0] = address(flashLoan);
         return providers;
-    }
-
-    /// @dev A15: register an 8-decimal, $1.00 debt-asset oracle so
-    /// `_computeRepayValueUsd6(debtAsset, REPAY_AMOUNT)` returns REPAY_VALUE_USD6 (1000e6).
-    /// Used only by the save-credit tests; other tests exercise the
-    /// zero-oracle path where `saveCredits` is not accrued.
-    function _registerDebtOracleAtOneDollar() internal {
-        MockChainlinkAggregator agg = new MockChainlinkAggregator(8, 1e8);
-        vm.prank(timelock);
-        core.setAssetOracle(address(debtToken), address(agg), 1 days);
     }
 
     // ─── A7: minCollateralUsd gate in enableProtection ─────────────
@@ -180,107 +175,6 @@ contract SepehrCoreTriggersTest is Test {
         assertEq(core.ownerFeeBalances(address(debtToken)), ownerShare);
         assertEq(core.ownerFeeBalances(address(usdc)), shieldMonthly);
         assertEq(core.keeperFeeBalances(keeper, address(debtToken)), keeperShare);
-    }
-
-    function test_execute_updatesSaveCredits() public {
-        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
-        seqAdapter.setDelegation(alice, true);
-        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
-
-        bytes32 seqKey = keccak256("SAVE_CREDIT_PROTOCOL");
-        vm.prank(timelock);
-        core.addAdapter(seqKey, address(seqAdapter));
-
-        vm.prank(alice);
-        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
-
-        // A15: save-credit USD value is now computed from the registered debt-asset oracle.
-        // At $1.00 (1e8) × 1000e18 repay / 1e18 decimals / 100 (oracle→USD6 scaling) = 1000e6.
-        _registerDebtOracleAtOneDollar();
-        address[] memory providers = _buildFlashProviders();
-
-        vm.prank(keeper);
-        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
-
-        assertEq(core.getSaveCredits(alice), REPAY_VALUE_USD6);
-    }
-
-    function test_execute_saveCreditsCumulative() public {
-        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
-        seqAdapter.setDelegation(alice, true);
-        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 20);
-
-        bytes32 seqKey = keccak256("CUMULATIVE_PROTOCOL");
-        vm.prank(timelock);
-        core.addAdapter(seqKey, address(seqAdapter));
-
-        vm.prank(alice);
-        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
-
-        _registerDebtOracleAtOneDollar();
-        address[] memory providers = _buildFlashProviders();
-
-        // First execution
-        vm.prank(keeper);
-        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
-
-        // Warp past cooldown, reset adapter
-        vm.warp(block.timestamp + 3601);
-        seqAdapter.reset(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
-        debtToken.mint(address(flashLoan), REPAY_AMOUNT * 10);
-
-        // Second execution
-        vm.prank(keeper);
-        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
-
-        assertEq(core.getSaveCredits(alice), REPAY_VALUE_USD6 * 2);
-    }
-
-    /// @dev A15: when the debt-asset oracle is absent, save credits are NOT accrued. The
-    /// trigger still succeeds (oracle coverage is rolled out per-asset), but the user-facing
-    /// metric only grows when it can be verified on-chain. Keepers cannot inflate the metric
-    /// by supplying their own USD number — that parameter no longer exists in the signature.
-    function test_execute_accruesZeroSaveCreditWhenDebtOracleMissing() public {
-        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
-        seqAdapter.setDelegation(alice, true);
-        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
-
-        bytes32 seqKey = keccak256("NO_ORACLE_SAVE_CREDIT");
-        vm.prank(timelock);
-        core.addAdapter(seqKey, address(seqAdapter));
-
-        vm.prank(alice);
-        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
-
-        address[] memory providers = _buildFlashProviders();
-
-        uint256 before = core.getSaveCredits(alice);
-        vm.prank(keeper);
-        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
-
-        assertEq(core.getSaveCredits(alice), before, "save credits must not accrue without oracle");
-    }
-
-    function test_execute_emitsSaveCreditEvent() public {
-        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
-        seqAdapter.setDelegation(alice, true);
-        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
-
-        bytes32 seqKey = keccak256("SAVE_EVENT_PROTOCOL");
-        vm.prank(timelock);
-        core.addAdapter(seqKey, address(seqAdapter));
-
-        vm.prank(alice);
-        core.enableProtection(seqKey, THRESHOLD_HF, 250, 2500);
-
-        _registerDebtOracleAtOneDollar();
-        address[] memory providers = _buildFlashProviders();
-
-        vm.expectEmit(true, false, false, true, address(core));
-        emit SepehrEvents.SaveCreditAccrued(alice, REPAY_VALUE_USD6, REPAY_VALUE_USD6);
-
-        vm.prank(keeper);
-        core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
     }
 
     function test_execute_emitsTriggeredEvent() public {
@@ -838,7 +732,9 @@ contract SepehrCoreTriggersTest is Test {
     /// @dev Internal helper — wires a fresh SequentialMockAdapter under `seqKey`,
     /// enables alice's protection against it, and funds the DEX + adapter so a
     /// collateral→debt swap is possible. Keeps each D2 test self-contained.
-    function _setupForSwap(bytes32 seqKey) internal {
+    function _setupForSwap(
+        bytes32 seqKey
+    ) internal {
         SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
         seqAdapter.setDelegation(alice, true);
 
@@ -1091,42 +987,69 @@ contract SequentialMockAdapter {
     uint256 public currentHF;
     uint256 public postRepayHF;
 
-    constructor(uint256 _initialHF, uint256 _postRepayHF) {
+    constructor(
+        uint256 _initialHF,
+        uint256 _postRepayHF
+    ) {
         currentHF = _initialHF;
         postRepayHF = _postRepayHF;
     }
 
-    function reset(uint256 _initialHF, uint256 _postRepayHF) external {
+    function reset(
+        uint256 _initialHF,
+        uint256 _postRepayHF
+    ) external {
         currentHF = _initialHF;
         postRepayHF = _postRepayHF;
     }
 
-    function setDelegation(address user, bool delegated) external {
+    function setDelegation(
+        address user,
+        bool delegated
+    ) external {
         delegations[user] = delegated;
     }
 
-    function getHealthFactor(address) external view returns (uint256) {
+    function getHealthFactor(
+        address
+    ) external view returns (uint256) {
         return currentHF;
     }
 
-    function checkDelegation(address user) external view returns (bool) {
+    function checkDelegation(
+        address user
+    ) external view returns (bool) {
         return delegations[user];
     }
 
-    function repay(address, address debtAsset, uint256 amount) external {
+    function repay(
+        address,
+        address debtAsset,
+        uint256 amount
+    ) external {
         ERC20(debtAsset).transfer(address(0xdead), amount);
         currentHF = postRepayHF;
     }
 
-    function withdrawCollateral(address, address collateralAsset, uint256 amount, address recipient) external {
+    function withdrawCollateral(
+        address,
+        address collateralAsset,
+        uint256 amount,
+        address recipient
+    ) external {
         ERC20(collateralAsset).transfer(recipient, amount);
     }
 
-    function getCollateralValueUsd(address) external pure returns (uint256) {
+    function getCollateralValueUsd(
+        address
+    ) external pure returns (uint256) {
         return 10_000e8; // $10k — below Shield tier cap ($15k) so execute() passes H01 check
     }
 
-    function getDebt(address, address) external pure returns (uint256) {
+    function getDebt(
+        address,
+        address
+    ) external pure returns (uint256) {
         return 0;
     }
 }

@@ -25,7 +25,7 @@ contract GuardMockERC20 is ERC20 {
 /// @notice Verifies the `onlyExpectedChain` gate introduced with the V1 Arbitrum pivot.
 /// ADR-0011: SepehrCore must be fully inert on any chain whose `block.chainid` differs from
 /// the `expectedChainId` captured at deploy. The guard protects mutative functions AND the
-/// user-state view getters (subscription, protection, keeper, save-credits, user-protocols);
+/// user-state view getters (subscription, protection, keeper, user-protocols);
 /// pure-constant getters (`paused()`, `TIER_FEE_BPS(...)`) stay callable because they expose
 /// no user-specific state.
 contract SepehrCoreChainGuardTest is Test {
@@ -217,12 +217,6 @@ contract SepehrCoreChainGuardTest is Test {
         vm.chainId(wrongChainId);
         _expectWrongChainRevert();
         core.isKeeper(keeper);
-    }
-
-    function test_getSaveCredits_revertsOnWrongChain() public {
-        vm.chainId(wrongChainId);
-        _expectWrongChainRevert();
-        core.getSaveCredits(user);
     }
 
     function test_getUserProtocols_revertsOnWrongChain() public {

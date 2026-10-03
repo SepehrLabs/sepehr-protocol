@@ -8,7 +8,6 @@ library SepehrEvents {
     event Unsubscribed(address indexed user);
     event TierUpgraded(address indexed user, uint8 oldTier, uint8 newTier);
     event TitanSubscriptionGranted(address indexed user, uint256 expiresAt);
-    event SaveCreditAccrued(address indexed user, uint256 amountUsd6, uint256 totalCredits);
 
     // ─── Positions ───────────────────────────────────────────────
     event ProtectionEnabled(

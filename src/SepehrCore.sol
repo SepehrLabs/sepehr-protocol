@@ -235,8 +235,6 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @notice Accrued keeper revenue per keeper and per asset (debt asset of the trigger).
     mapping(address keeper => mapping(address asset => uint256 amount)) public keeperFeeBalances;
 
-    mapping(address => uint256) public saveCredits;
-
     /// @notice M1: last `block.timestamp` at which `setTierPrice` mutated a given
     /// (tier, annual) key. Packed into a single slot per key; read/written inside the
     /// cooldown check below.
@@ -685,28 +683,8 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         ownerFeeBalances[debtAsset] += ownerShare;
         keeperFeeBalances[msg.sender][debtAsset] += keeperShare;
 
-        // A15: compute save-credit USD value from the on-chain oracle instead of trusting the
-        // keeper. When no debt-asset oracle is registered, we credit 0 (conservative) — the
-        // trigger still succeeds so protection is not gated on oracle coverage, but the
-        // user-facing "money saved" metric only accrues when it can be verified on-chain.
-        //
-        // M2: cap the per-user save-credit total at type(uint128).max (USDC-6 units, so
-        // ~3.4e32 USDC). Far above any realistic career-long cumulative protection for a
-        // single wallet, but keeps UI-side scaling predictable and forecloses a silent
-        // overflow path if an attacker could ever contrive an oracle that reports an
-        // astronomically large debt-asset price.
-        uint256 repayValueUsd6 = _computeRepayValueUsd6(debtAsset, repayAmount);
-        if (repayValueUsd6 > 0) {
-            uint256 newTotal = saveCredits[user] + repayValueUsd6;
-            if (newTotal > type(uint128).max) {
-                newTotal = type(uint128).max;
-            }
-            saveCredits[user] = newTotal;
-        }
-
         emit SepehrEvents.Triggered(user, protocolKey, msg.sender, repayAmount, 0, hfBefore, hfAfter, totalFee);
         emit SepehrEvents.FeeCollected(msg.sender, totalFee, ownerShare, keeperShare);
-        emit SepehrEvents.SaveCreditAccrued(user, repayValueUsd6, saveCredits[user]);
     }
 
     // ─── Flash Loan Callback ─────────────────────────────────────
@@ -1304,21 +1282,6 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         return uint256(answer);
     }
 
-    /// @notice A15: project `repayAmount` into 6-decimal USD using the debt-asset oracle.
-    /// @dev `saveCredits` are denominated in 6 decimals to match USDC (and the `TIER_PRICES_*_USD_6`
-    /// constants). The oracle answer is 8-decimal (enforced by `setAssetOracle`), so the reduction
-    /// is `... / 10^(ORACLE_PRICE_DECIMALS - 6)` → `... / 100`. Returns 0 if the debt asset has no
-    /// registered oracle — callers treat 0 as "no save credit accrued" rather than a revert, so
-    /// triggers still succeed on assets during the phased rollout of oracle coverage.
-    function _computeRepayValueUsd6(address debtAsset, uint256 repayAmount) internal view returns (uint256) {
-        AssetOracle memory debtOracle = assetOracles[debtAsset];
-        if (address(debtOracle.aggregator) == address(0)) return 0;
-        uint256 debtPrice = _readOraclePrice(debtAsset, debtOracle);
-        uint256 debtDec = IERC20Metadata(debtAsset).decimals();
-        // repayAmount (debtDec) * price (8dp) / 10^debtDec / 10^(8-6)
-        return Math.mulDiv(repayAmount, debtPrice, 10 ** debtDec * 100);
-    }
-
     /// @notice A18: swap-and-pop `protocolKey` out of `_userProtocols[user]`. Preserves O(1) per
     /// removal; ordering is not contractually stable (callers consume the list as an unordered
     /// set). No-op if the key is missing, since `disableProtection` already verifies
@@ -1367,11 +1330,6 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @inheritdoc ISepehrCore
     function isKeeper(address addr) external view override onlyExpectedChain returns (bool) {
         return keepers[addr];
-    }
-
-    /// @inheritdoc ISepehrCore
-    function getSaveCredits(address user) external view override onlyExpectedChain returns (uint256) {
-        return saveCredits[user];
     }
 
     /// @notice A18: return the ordered list of protocol keys for which `user` has protection
