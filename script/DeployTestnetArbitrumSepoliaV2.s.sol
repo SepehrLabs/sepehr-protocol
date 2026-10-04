@@ -6,6 +6,7 @@ import {Script, console} from "forge-std/Script.sol";
 
 import {SepehrCore} from "../src/SepehrCore.sol";
 import {AaveV3Adapter} from "../src/adapters/AaveV3Adapter.sol";
+import {UniswapV3Router} from "../src/dex/UniswapV3Router.sol";
 import {AaveFlashLoanProvider} from "../src/flash/AaveFlashLoanProvider.sol";
 import {MockChainlinkAggregator} from "../test/helpers/MockChainlinkAggregator.sol";
 
@@ -22,21 +23,25 @@ import {MockChainlinkAggregator} from "../test/helpers/MockChainlinkAggregator.s
 ///         through `SepehrTimelock` — this is a documented deviation
 ///         (see `docs/testnet/arbitrum-sepolia-quickstart.md` §1).
 ///
-/// Required env (same set as Bloc 5 script + nothing new):
+/// Required env:
 ///   DEPLOYER_ADDRESS, SEPEHR_OWNER, SEPEHR_PAUSE_GUARDIAN,
 ///   KEEPER_ADDRESS, USDC_ADDRESS, AAVE_POOL, AAVE_ATOKEN,
-///   PROTOCOL_KEY_AAVE
+///   PROTOCOL_KEY_AAVE, UNIV3_SWAP_ROUTER, UNIV3_FACTORY
 ///
 /// Optional env (carried over from V1):
 ///   SEPEHR_MIN_COLLATERAL_USD (default 0),
 ///   SEPEHR_TVL_CAP_USD (default type(uint256).max),
 ///   WETH_ADDRESS (unused in V2 — WETH oracle omitted for now),
 ///   MOCK_ETH_PRICE_USD_8 (default $3000 * 1e8),
-///   MOCK_USDC_PRICE_USD_8 (default $1 * 1e8)
+///   MOCK_USDC_PRICE_USD_8 (default $1 * 1e8),
+///   UNIV3_DEFAULT_FEE (default 3000)
+///
+/// `SepehrCore.execute` requires a whitelisted DEX router even when the
+/// debt and collateral assets match and no swap happens, so the router
+/// is part of the minimal surface.
 ///
 /// Output: writes `deployments/arbitrum-sepolia-v2.json` with every
-/// address + the `earliestExecuteTimestamp` so the execute script can
-/// guard against running too early.
+/// address read by the execute script.
 contract DeployTestnetArbitrumSepoliaV2 is Script {
     uint256 internal constant ARBITRUM_SEPOLIA_CHAIN_ID = 421_614;
     uint256 internal constant TESTNET_TIMELOCK_DELAY = 300; // 5 min
@@ -55,6 +60,9 @@ contract DeployTestnetArbitrumSepoliaV2 is Script {
         address aToken = vm.envAddress("AAVE_ATOKEN");
         address keeper = vm.envAddress("KEEPER_ADDRESS");
         bytes32 aaveKey = vm.envBytes32("PROTOCOL_KEY_AAVE");
+        address uniV3SwapRouter = vm.envAddress("UNIV3_SWAP_ROUTER");
+        address uniV3Factory = vm.envAddress("UNIV3_FACTORY");
+        uint24 uniV3DefaultFee = uint24(vm.envOr("UNIV3_DEFAULT_FEE", uint256(3000)));
 
         uint256 minCollateralUsd = vm.envOr("SEPEHR_MIN_COLLATERAL_USD", uint256(0));
         uint256 tvlCapUsd = vm.envOr("SEPEHR_TVL_CAP_USD", type(uint256).max);
@@ -80,6 +88,9 @@ contract DeployTestnetArbitrumSepoliaV2 is Script {
         AaveFlashLoanProvider aaveFlash = new AaveFlashLoanProvider(aavePool, address(timelock));
         console.log("FLASH_AAVE", address(aaveFlash));
 
+        UniswapV3Router dexRouter = new UniswapV3Router(uniV3SwapRouter, uniV3Factory, uniV3DefaultFee);
+        console.log("DEX_ROUTER", address(dexRouter));
+
         uint256 ethPrice = vm.envOr("MOCK_ETH_PRICE_USD_8", uint256(300_000_000_000));
         uint256 usdcPrice = vm.envOr("MOCK_USDC_PRICE_USD_8", uint256(100_000_000));
         MockChainlinkAggregator ethOracle = new MockChainlinkAggregator(8, int256(ethPrice));
@@ -98,17 +109,15 @@ contract DeployTestnetArbitrumSepoliaV2 is Script {
         bytes memory dataSetOracle = abi.encodeWithSignature(
             "setAssetOracle(address,address,uint256)", usdc, address(usdcOracle), ORACLE_STALENESS
         );
+        bytes memory dataAddRouter = abi.encodeWithSignature("addDexRouter(address)", address(dexRouter));
 
         timelock.schedule(address(core), 0, dataAddAdapter, bytes32(0), bytes32(0), TESTNET_TIMELOCK_DELAY);
         timelock.schedule(address(core), 0, dataAddKeeper, bytes32(0), bytes32(0), TESTNET_TIMELOCK_DELAY);
         timelock.schedule(address(core), 0, dataAddFlash, bytes32(0), bytes32(0), TESTNET_TIMELOCK_DELAY);
         timelock.schedule(address(core), 0, dataSetOracle, bytes32(0), bytes32(0), TESTNET_TIMELOCK_DELAY);
+        timelock.schedule(address(core), 0, dataAddRouter, bytes32(0), bytes32(0), TESTNET_TIMELOCK_DELAY);
 
         vm.stopBroadcast();
-
-        uint256 earliest = block.timestamp + TESTNET_TIMELOCK_DELAY;
-        console.log("EARLIEST_EXECUTE_TIMESTAMP", earliest);
-        console.log("SCHEDULE_BLOCK", block.number);
 
         // ─── Persist JSON for ExecuteTimelockV2 ──────────────────
         string memory key = "deploy";
@@ -116,14 +125,13 @@ contract DeployTestnetArbitrumSepoliaV2 is Script {
         vm.serializeAddress(key, "core", address(core));
         vm.serializeAddress(key, "aaveAdapter", address(aaveAdapter));
         vm.serializeAddress(key, "aaveFlash", address(aaveFlash));
+        vm.serializeAddress(key, "dexRouter", address(dexRouter));
         vm.serializeAddress(key, "ethOracle", address(ethOracle));
         vm.serializeAddress(key, "usdcOracle", address(usdcOracle));
         vm.serializeAddress(key, "usdc", usdc);
         vm.serializeAddress(key, "keeper", keeper);
         vm.serializeBytes32(key, "aaveKey", aaveKey);
         vm.serializeUint(key, "chainId", block.chainid);
-        vm.serializeUint(key, "scheduleBlock", block.number);
-        vm.serializeUint(key, "earliestExecuteTimestamp", earliest);
         string memory finalJson = vm.serializeUint(key, "timelockDelaySeconds", TESTNET_TIMELOCK_DELAY);
         vm.writeJson(finalJson, "deployments/arbitrum-sepolia-v2.json");
 

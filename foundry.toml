@@ -73,5 +73,5 @@ arbitrum-sepolia = "${RPC_ARBITRUM_SEPOLIA_PRIMARY_HTTP}"
 # `forge script ... --verify --etherscan-api-key $ARBISCAN_API_KEY --chain arbitrum-sepolia`
 # resolves through this section.
 [etherscan]
-arbitrum-one = { key = "${ARBISCAN_API_KEY}", chain = 42161, url = "https://api.arbiscan.io/api" }
-arbitrum-sepolia = { key = "${ARBISCAN_API_KEY}", chain = 421614, url = "https://api-sepolia.arbiscan.io/api" }
+arbitrum-one = { key = "${ARBISCAN_API_KEY}", chain = 42161 }
+arbitrum-sepolia = { key = "${ARBISCAN_API_KEY}", chain = 421614 }

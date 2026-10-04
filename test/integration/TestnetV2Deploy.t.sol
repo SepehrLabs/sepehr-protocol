@@ -28,14 +28,16 @@ contract MockERC20 is ERC20 {
 /// @notice Integration test for the Bloc 5.1 testnet V2 deploy flow:
 ///         OZ TimelockController with minDelay = 300s (5 min) gates the
 ///         post-deploy admin ops (`addAdapter`, `addKeeper`,
-///         `addFlashLoanProvider`, `setAssetOracle`). Freezes the
+///         `addFlashLoanProvider`, `setAssetOracle`, `addDexRouter`). Freezes the
 ///         contract-level invariants that the Phase 2 split-deploy
 ///         scripts rely on:
 ///           1. the timelock's minDelay is exactly 300s,
 ///           2. a scheduled op is pending before the delay elapses,
 ///           3. executing before the delay reverts,
 ///           4. executing after the delay populates the core's admin
-///              registries (adapter, keeper, flash, asset oracle).
+///              registries (adapter, keeper, flash, asset oracle, DEX router),
+///           5. an op moves Waiting → Ready → Done, the states the
+///              execute script checks before broadcasting.
 contract TestnetV2DeployTest is Test {
     uint256 internal constant TESTNET_TIMELOCK_DELAY = 300; // 5 min
     bytes32 internal constant AAVE_KEY = keccak256("aave-v3-arbitrum-sepolia");
@@ -50,6 +52,7 @@ contract TestnetV2DeployTest is Test {
     MockERC20 internal usdc;
     MockChainlinkAggregator internal usdcOracle;
     address internal flashProvider = makeAddr("flash");
+    address internal dexRouter = makeAddr("dexRouter");
 
     function setUp() public {
         // Mirror Phase 2 DeployAndSchedule: deployer is the sole proposer
@@ -172,6 +175,24 @@ contract TestnetV2DeployTest is Test {
         (address agg, uint256 staleness) = _readAssetOracle(address(usdc));
         assertEq(agg, address(usdcOracle), "oracle not registered");
         assertEq(staleness, 86_400, "staleness mismatch");
+    }
+
+    function test_executeAddDexRouterAfterDelay() public {
+        bytes memory data = abi.encodeWithSignature("addDexRouter(address)", dexRouter);
+        bytes32 id = timelock.hashOperation(address(core), 0, data, bytes32(0), bytes32(0));
+
+        vm.prank(deployer);
+        timelock.schedule(address(core), 0, data, bytes32(0), bytes32(0), TESTNET_TIMELOCK_DELAY);
+        assertEq(uint8(timelock.getOperationState(id)), uint8(TimelockController.OperationState.Waiting));
+
+        vm.warp(block.timestamp + TESTNET_TIMELOCK_DELAY);
+        assertEq(uint8(timelock.getOperationState(id)), uint8(TimelockController.OperationState.Ready));
+
+        vm.prank(deployer);
+        timelock.execute(address(core), 0, data, bytes32(0), bytes32(0));
+
+        assertEq(uint8(timelock.getOperationState(id)), uint8(TimelockController.OperationState.Done));
+        assertTrue(core.allowedDexRouters(dexRouter), "dex router not whitelisted");
     }
 
     // ─── 5. Single-adapter invariant (ADR-0011 SKIP Compound + Morpho) ─

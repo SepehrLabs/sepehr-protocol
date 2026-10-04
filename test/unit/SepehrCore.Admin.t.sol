@@ -14,9 +14,15 @@ import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockChainlinkAggregator} from "../helpers/MockChainlinkAggregator.sol";
 
 contract MockERC20 is ERC20 {
-    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
+    constructor(
+        string memory name_,
+        string memory symbol_
+    ) ERC20(name_, symbol_) {}
 
-    function mint(address to, uint256 amount) external {
+    function mint(
+        address to,
+        uint256 amount
+    ) external {
         _mint(to, amount);
     }
 }
@@ -1090,11 +1096,15 @@ contract SepehrCoreAdminTest is Test {
         core.renounceOwnership();
     }
 
-    function _readAssetOracle(address asset) internal view returns (address agg, uint256 stale) {
+    function _readAssetOracle(
+        address asset
+    ) internal view returns (address agg, uint256 stale) {
         (agg, stale) = _callAssetOracles(asset);
     }
 
-    function _callAssetOracles(address asset) internal view returns (address agg, uint256 stale) {
+    function _callAssetOracles(
+        address asset
+    ) internal view returns (address agg, uint256 stale) {
         (bool ok, bytes memory ret) = address(core).staticcall(abi.encodeWithSignature("assetOracles(address)", asset));
         require(ok, "assetOracles call failed");
         (agg, stale) = abi.decode(ret, (address, uint256));

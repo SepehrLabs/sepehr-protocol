@@ -10,10 +10,12 @@ import {IProtocolAdapter} from "../src/interfaces/IProtocolAdapter.sol";
 /// @title ExecuteTestnetTimelockV2
 /// @notice Part 2 of the Bloc 5.1 split deploy. Reads the addresses
 ///         persisted by `DeployTestnetArbitrumSepoliaV2.s.sol` and
-///         executes the four admin ops it scheduled (addAdapter,
-///         addKeeper, addFlashLoanProvider, setAssetOracle). The
-///         timelock enforces the 300-second delay: running this too
-///         early reverts with `TimelockUnexpectedOperationState`.
+///         executes the five admin ops it scheduled (addAdapter,
+///         addKeeper, addFlashLoanProvider, setAssetOracle,
+///         addDexRouter). The timelock enforces the 300-second delay,
+///         counted from the block that mined the schedule: the script
+///         asks the timelock whether each op is ready before
+///         broadcasting anything.
 ///
 /// Required env:
 ///   DEPLOYER_ADDRESS (must match the proposer of the scheduled ops)
@@ -34,24 +36,11 @@ contract ExecuteTestnetTimelockV2 is Script {
         address coreAddr = vm.parseJsonAddress(json, ".core");
         address aaveAdapter = vm.parseJsonAddress(json, ".aaveAdapter");
         address aaveFlash = vm.parseJsonAddress(json, ".aaveFlash");
+        address dexRouter = vm.parseJsonAddress(json, ".dexRouter");
         address usdcOracle = vm.parseJsonAddress(json, ".usdcOracle");
         address usdc = vm.parseJsonAddress(json, ".usdc");
         address keeper = vm.parseJsonAddress(json, ".keeper");
         bytes32 aaveKey = vm.parseJsonBytes32(json, ".aaveKey");
-        uint256 earliest = vm.parseJsonUint(json, ".earliestExecuteTimestamp");
-
-        // Fail-fast if the operator calls execute too early. The
-        // TimelockController would revert anyway, but a pre-flight check
-        // gives a clearer error message.
-        require(
-            block.timestamp >= earliest,
-            string.concat(
-                "ExecuteTestnetTimelockV2: delay not elapsed. Earliest=",
-                vm.toString(earliest),
-                " now=",
-                vm.toString(block.timestamp)
-            )
-        );
 
         TimelockController timelock = TimelockController(payable(timelockAddr));
         SepehrCore core = SepehrCore(coreAddr);
@@ -61,6 +50,13 @@ contract ExecuteTestnetTimelockV2 is Script {
         bytes memory dataAddFlash = abi.encodeWithSignature("addFlashLoanProvider(address)", aaveFlash);
         bytes memory dataSetOracle =
             abi.encodeWithSignature("setAssetOracle(address,address,uint256)", usdc, usdcOracle, ORACLE_STALENESS);
+        bytes memory dataAddRouter = abi.encodeWithSignature("addDexRouter(address)", dexRouter);
+
+        _requireReady(timelock, coreAddr, dataAddAdapter, "addAdapter");
+        _requireReady(timelock, coreAddr, dataAddKeeper, "addKeeper");
+        _requireReady(timelock, coreAddr, dataAddFlash, "addFlashLoanProvider");
+        _requireReady(timelock, coreAddr, dataSetOracle, "setAssetOracle");
+        _requireReady(timelock, coreAddr, dataAddRouter, "addDexRouter");
 
         vm.startBroadcast(deployer);
 
@@ -68,6 +64,7 @@ contract ExecuteTestnetTimelockV2 is Script {
         timelock.execute(address(core), 0, dataAddKeeper, bytes32(0), bytes32(0));
         timelock.execute(address(core), 0, dataAddFlash, bytes32(0), bytes32(0));
         timelock.execute(address(core), 0, dataSetOracle, bytes32(0), bytes32(0));
+        timelock.execute(address(core), 0, dataAddRouter, bytes32(0), bytes32(0));
 
         vm.stopBroadcast();
 
@@ -78,6 +75,7 @@ contract ExecuteTestnetTimelockV2 is Script {
         require(enabled, "execute: adapter disabled");
         require(core.keepers(keeper), "execute: keeper not set");
         require(core.allowedFlashProviders(aaveFlash), "execute: flash provider not set");
+        require(core.allowedDexRouters(dexRouter), "execute: dex router not set");
 
         (bool ok, bytes memory ret) = address(core).staticcall(abi.encodeWithSignature("assetOracles(address)", usdc));
         require(ok, "execute: oracle getter failed");
@@ -86,5 +84,36 @@ contract ExecuteTestnetTimelockV2 is Script {
         require(maxStale == ORACLE_STALENESS, "execute: staleness mismatch");
 
         console.log("TESTNET_V2_EXECUTE_COMPLETE");
+    }
+
+    /// @dev Reverts with the op's timelock state unless it can execute now.
+    function _requireReady(
+        TimelockController timelock,
+        address target,
+        bytes memory data,
+        string memory label
+    ) internal view {
+        bytes32 id = timelock.hashOperation(target, 0, data, bytes32(0), bytes32(0));
+        TimelockController.OperationState state = timelock.getOperationState(id);
+        if (state == TimelockController.OperationState.Ready) return;
+        if (state == TimelockController.OperationState.Waiting) {
+            revert(
+                string.concat(
+                    "ExecuteTestnetTimelockV2: ",
+                    label,
+                    " ready at ",
+                    vm.toString(timelock.getTimestamp(id)),
+                    ", now ",
+                    vm.toString(block.timestamp)
+                )
+            );
+        }
+        revert(
+            string.concat(
+                "ExecuteTestnetTimelockV2: ",
+                label,
+                state == TimelockController.OperationState.Done ? " already executed" : " never scheduled"
+            )
+        );
     }
 }
