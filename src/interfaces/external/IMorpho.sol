@@ -60,6 +60,14 @@ interface IMorpho {
     ) external view returns (MarketParams memory);
 }
 
+/// @notice Morpho interest rate model: the borrow rate per second, in WAD.
+interface IMorphoIrm {
+    function borrowRateView(
+        IMorpho.MarketParams memory marketParams,
+        IMorpho.Market memory market
+    ) external view returns (uint256);
+}
+
 /// @notice Minimal Morpho oracle interface (IOracle pattern).
 interface IMorphoOracle {
     function price() external view returns (uint256);

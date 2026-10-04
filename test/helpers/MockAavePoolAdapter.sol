@@ -33,6 +33,7 @@ contract MockAavePoolAdapter is IAavePool {
 
     mapping(address => AccountData) private _accountData;
     mapping(address => address) private _variableDebtToken;
+    mapping(address => address) private _aToken;
 
     RepayCall[] public repayCalls;
     WithdrawCall[] public withdrawCalls;
@@ -179,6 +180,13 @@ contract MockAavePoolAdapter is IAavePool {
         _variableDebtToken[asset] = variableDebtToken;
     }
 
+    function setAToken(
+        address asset,
+        address aToken
+    ) external {
+        _aToken[asset] = aToken;
+    }
+
     function getReserveData(
         address asset
     )
@@ -204,6 +212,6 @@ contract MockAavePoolAdapter is IAavePool {
         )
     {
         variableDebtTokenAddress = _variableDebtToken[asset];
-        return (0, 0, 0, 0, 0, 0, 0, 0, address(0), address(0), variableDebtTokenAddress, address(0), 0, 0, 0);
+        return (0, 0, 0, 0, 0, 0, 0, 0, _aToken[asset], address(0), variableDebtTokenAddress, address(0), 0, 0, 0);
     }
 }

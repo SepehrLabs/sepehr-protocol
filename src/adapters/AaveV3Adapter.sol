@@ -48,10 +48,13 @@ contract AaveV3Adapter is IProtocolAdapter {
     ///      `enableProtection`, but the subsequent trigger would revert in `safeTransferFrom`
     ///      because the adapter pulls the user's entire aToken share. Standard wallet "approve
     ///      max" sets `type(uint256).max`, which sits far above this threshold.
+    ///      M-3: the adapter can only withdraw `ATOKEN`, so the user must also hold some. An
+    ///      approval on a collateral the user did not hold let protection be enabled, and paid
+    ///      for, while every trigger reverted.
     function checkDelegation(
         address user
     ) external view returns (bool delegated) {
-        return IERC20(ATOKEN).allowance(user, address(this)) >= type(uint128).max;
+        return IERC20(ATOKEN).allowance(user, address(this)) >= type(uint128).max && IERC20(ATOKEN).balanceOf(user) != 0;
     }
 
     /// @inheritdoc IProtocolAdapter
@@ -87,6 +90,9 @@ contract AaveV3Adapter is IProtocolAdapter {
     ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
         if (recipient == address(0)) revert SepehrErrors.ZeroAddress();
+        // M-3: only the reserve behind ATOKEN can be withdrawn by this adapter.
+        (,,,,,,,, address reserveAToken,,,,,,) = POOL.getReserveData(collateralAsset);
+        if (reserveAToken != ATOKEN) revert SepehrErrors.CollateralAssetMismatch(ATOKEN, reserveAToken);
         IERC20(ATOKEN).safeTransferFrom(user, address(this), amount);
         POOL.withdraw(collateralAsset, amount, recipient);
     }

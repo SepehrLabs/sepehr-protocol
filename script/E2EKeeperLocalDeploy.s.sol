@@ -47,14 +47,16 @@ contract E2EKeeperLocalDeploy is Script {
                 loanToken: address(usdc),
                 collateralToken: address(weth),
                 oracle: address(morphoOracle),
-                irm: address(0xBEEF),
+                // MorphoLike accrues no interest: no IRM, which the adapter reads as a flat rate.
+                irm: address(0),
                 lltv: LLTV
             })
         );
 
         SepehrCore core =
             new SepehrCore(deployer, deployer, deployer, address(usdc), 0, type(uint256).max, block.chainid);
-        MorphoBlueAdapter adapter = new MorphoBlueAdapter(address(morpho), marketId, address(core));
+        MockChainlinkAggregator usdcFeed = new MockChainlinkAggregator(8, 1e8);
+        MorphoBlueAdapter adapter = new MorphoBlueAdapter(address(morpho), marketId, address(usdcFeed), address(core));
 
         MockAavePool flashPool = new MockAavePool();
         AaveFlashLoanProvider flash = new AaveFlashLoanProvider(address(flashPool), deployer);
@@ -65,7 +67,6 @@ contract E2EKeeperLocalDeploy is Script {
         UniswapV3Router router = new UniswapV3Router(address(swapRouter), address(new MockV3Factory()), 500);
 
         MockChainlinkAggregator ethFeed = new MockChainlinkAggregator(8, int256(ETH_USD_8));
-        MockChainlinkAggregator usdcFeed = new MockChainlinkAggregator(8, 1e8);
         Multicall3Lite multicall = new Multicall3Lite();
 
         core.addAdapter(MORPHO_KEY, address(adapter));

@@ -667,4 +667,117 @@ contract SepehrCoreSubscriptionsTest is Test {
         // Credit clamped to 0, so alice pays full Watchtower price.
         assertEq(usdc.balanceOf(alice), aliceBalBefore - WATCHTOWER_MONTHLY, "full price when treasury drained");
     }
+
+    // ─── M-1: refunds and credits follow what was paid ──────────────
+
+    function _paid(
+        address user
+    ) internal view returns (uint256 paid, uint256 startedAt) {
+        (paid, startedAt) = core.subscriptionPayments(user);
+    }
+
+    function test_subscribe_recordsWhatWasPaid() public {
+        vm.prank(alice);
+        core.subscribe(2, true);
+
+        (uint256 paid, uint256 startedAt) = _paid(alice);
+        assertEq(paid, GUARDIAN_ANNUAL);
+        assertEq(startedAt, block.timestamp);
+    }
+
+    /// @dev M-1 (audit PoC): prepaying years before a +50% price rise refunds what was paid,
+    /// not the stacked years at the new price.
+    function test_unsubscribe_refundsWhatWasPaidAfterAPriceRise() public {
+        usdc.mint(alice, 100_000e6);
+        vm.startPrank(alice);
+        core.subscribe(3, true);
+        for (uint256 i = 0; i < 9; i++) {
+            core.renew();
+        }
+        vm.stopPrank();
+        uint256 paidTotal = WATCHTOWER_ANNUAL * 10;
+        (uint256 paid,) = _paid(alice);
+        assertEq(paid, paidTotal);
+
+        vm.prank(timelock);
+        core.setTierPrice(3, true, (WATCHTOWER_ANNUAL * 15) / 10);
+
+        uint256 before = usdc.balanceOf(alice);
+        vm.prank(alice);
+        core.unsubscribe();
+
+        assertEq(usdc.balanceOf(alice) - before, paidTotal, "refund is what was paid, unused");
+        (paid,) = _paid(alice);
+        assertEq(paid, 0, "payment record cleared");
+    }
+
+    function test_unsubscribe_refundIsUnchangedByAPriceCut() public {
+        vm.prank(alice);
+        core.subscribe(2, false);
+        vm.warp(block.timestamp + MONTHLY_PERIOD / 2);
+
+        vm.prank(timelock);
+        core.setTierPrice(2, false, GUARDIAN_MONTHLY / 2);
+
+        uint256 before = usdc.balanceOf(alice);
+        vm.prank(alice);
+        core.unsubscribe();
+
+        assertEq(usdc.balanceOf(alice) - before, GUARDIAN_MONTHLY / 2, "half of what was paid");
+    }
+
+    function test_renew_whileActive_addsToTheWindow() public {
+        vm.startPrank(alice);
+        core.subscribe(1, false);
+        uint256 startedAt = vm.getBlockTimestamp();
+        vm.warp(startedAt + 10 days);
+        core.renew();
+        vm.stopPrank();
+
+        (uint256 paid, uint256 windowStart) = _paid(alice);
+        assertEq(paid, SHIELD_MONTHLY * 2);
+        assertEq(windowStart, startedAt);
+    }
+
+    function test_renew_afterExpiry_opensANewWindow() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+        vm.warp(block.timestamp + MONTHLY_PERIOD + 1 days);
+
+        vm.prank(alice);
+        core.renew();
+
+        (uint256 paid, uint256 startedAt) = _paid(alice);
+        assertEq(paid, SHIELD_MONTHLY);
+        assertEq(startedAt, block.timestamp);
+    }
+
+    function test_upgradeTier_creditFollowsWhatWasPaidAfterAPriceRise() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+        vm.warp(block.timestamp + MONTHLY_PERIOD / 2);
+
+        vm.prank(timelock);
+        core.setTierPrice(1, false, (SHIELD_MONTHLY * 15) / 10);
+
+        uint256 before = usdc.balanceOf(alice);
+        vm.prank(alice);
+        core.upgradeTier(2, false);
+
+        assertEq(before - usdc.balanceOf(alice), GUARDIAN_MONTHLY - SHIELD_MONTHLY / 2, "credit from what was paid");
+        (uint256 paid, uint256 startedAt) = _paid(alice);
+        assertEq(paid, GUARDIAN_MONTHLY);
+        assertEq(startedAt, block.timestamp);
+    }
+
+    function test_grantTitan_clearsAnExpiredPayment() public {
+        vm.prank(alice);
+        core.subscribe(1, false);
+        vm.warp(block.timestamp + MONTHLY_PERIOD + 1);
+
+        core.grantTitanSubscription(alice, 30 days);
+
+        (uint256 paid,) = _paid(alice);
+        assertEq(paid, 0);
+    }
 }

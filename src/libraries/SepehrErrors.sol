@@ -23,10 +23,14 @@ library SepehrErrors {
     error MaxRepayExceeded(uint256 requested, uint256 maxAllowed);
     error RepayExceedsUserLimit(uint256 requested, uint256 allowed);
     error SlippageExceeded(uint256 actualOut, uint256 minExpected);
-    error PostExecutionHFBelowThreshold(uint256 hfAfter, uint256 threshold);
+    /// @notice The rescue left the core with less debt asset than the flash-loan repayment plus
+    /// the trigger fee (for instance a fee-on-transfer collateral).
+    error InsufficientRescueProceeds(uint256 available, uint256 required);
     error HealthFactorNotImproved(uint256 hfBefore, uint256 hfAfter);
     error ImplausibleHealthFactor(uint256 hf, uint256 floor);
     error DebtAssetMismatch(address expected, address provided);
+    /// @notice M-6: the adapter reports no debt of `debtAsset` for `user`.
+    error NoDebtToRepay(address user, address debtAsset);
     error CollateralAssetMismatch(address expected, address provided);
     error UnsupportedTokenBehavior(address token);
 
@@ -70,6 +74,12 @@ library SepehrErrors {
     error InvalidOraclePrice(address asset, int256 answer);
     error InvalidOracleStaleness(uint256 maxStaleness);
     error InvalidOracleDecimals(uint8 actual, uint8 expected);
+    /// @notice L-5: the L2 sequencer uptime feed reports the sequencer down, or an invalid round.
+    error SequencerDown();
+    /// @notice L-5: the sequencer came back up less than `SEQUENCER_GRACE_PERIOD` ago.
+    error SequencerGracePeriodNotOver(uint256 upSince);
+    /// @notice I-2: a repay share this low makes every trigger revert.
+    error RepayPercentTooLow(uint256 provided, uint256 min);
 
     error ProtectionNotEnabled(address user, bytes32 protocolKey);
     error ProtectionAlreadyEnabled(address user, bytes32 protocolKey);

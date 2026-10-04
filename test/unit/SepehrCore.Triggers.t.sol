@@ -4,8 +4,10 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {SepehrCore} from "../../src/SepehrCore.sol";
+import {IDexRouter} from "../../src/interfaces/IDexRouter.sol";
 import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
 import {Percentages} from "../../src/libraries/Percentages.sol";
 import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
@@ -49,6 +51,8 @@ contract SepehrCoreTriggersTest is Test {
     uint256 public constant HF_BELOW_THRESHOLD = 1.1e18;
     uint256 public constant HF_ABOVE_THRESHOLD = 1.5e18;
     uint256 public constant THRESHOLD_HF = 1.3e18;
+    /// @dev H-2: a rescue that improves the HF without clearing the 1.3 threshold.
+    uint256 public constant HF_PARTIAL_RESCUE = 1.25e18;
     uint256 public constant MONTHLY_PERIOD = 30 days;
 
     // Shield tier fee: 20 bps (0.20%)
@@ -88,6 +92,7 @@ contract SepehrCoreTriggersTest is Test {
         core.enableProtection(PROTOCOL_KEY, THRESHOLD_HF, 250, 2500);
 
         adapter.setHealthFactor(alice, HF_BELOW_THRESHOLD);
+        adapter.setDebt(alice, address(debtToken), REPAY_AMOUNT * 100);
 
         debtToken.mint(address(flashLoan), REPAY_AMOUNT * 2);
         collateralToken.mint(address(adapter), REPAY_AMOUNT * 2);
@@ -213,8 +218,8 @@ contract SepehrCoreTriggersTest is Test {
         uint256 totalFee = Percentages.applyBps(REPAY_AMOUNT, SHIELD_FEE_BPS);
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(totalFee);
 
-        vm.expectEmit(true, false, false, true, address(core));
-        emit SepehrEvents.FeeCollected(keeper, totalFee, ownerShare, keeperShare);
+        vm.expectEmit(true, true, false, true, address(core));
+        emit SepehrEvents.FeeCollected(keeper, address(debtToken), totalFee, ownerShare, keeperShare);
 
         vm.prank(keeper);
         core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
@@ -294,7 +299,7 @@ contract SepehrCoreTriggersTest is Test {
     }
 
     function test_execute_revertsOnCooldown() public {
-        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_PARTIAL_RESCUE);
         seqAdapter.setDelegation(alice, true);
         debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
 
@@ -309,7 +314,8 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(keeper);
         core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
 
-        seqAdapter.reset(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        // H-2: the HF has not fallen 1% below what the trigger left, so the cooldown holds.
+        seqAdapter.reset(HF_PARTIAL_RESCUE, HF_ABOVE_THRESHOLD);
 
         uint256 remaining = 3600;
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.CooldownActive.selector, remaining));
@@ -416,8 +422,8 @@ contract SepehrCoreTriggersTest is Test {
 
     /// @dev A17: a provider that reports `isAvailable == true` but reverts inside `flashBorrow`
     /// triggers the `catch (bytes memory reason)` path; `_borrowFlashLoan` must emit
-    /// `FlashAttemptFailed(provider, reason)` with the exact upstream revert bytes before
-    /// falling through and ultimately reverting with `NoFlashLoanAvailable`.
+    /// `FlashAttemptFailed(provider, reason)` with the exact upstream revert bytes, then
+    /// re-raise those bytes once no provider is left (L-1).
     function test_execute_emitsFlashAttemptFailedOnProviderRevert() public {
         adapter.setHealthFactor(alice, HF_BELOW_THRESHOLD);
 
@@ -428,10 +434,43 @@ contract SepehrCoreTriggersTest is Test {
 
         vm.expectEmit(true, false, false, true, address(core));
         emit SepehrEvents.FlashAttemptFailed(address(flashLoan), reason);
+        vm.expectRevert(reason);
+        vm.prank(keeper);
+        core.execute(
+            alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
+        );
+    }
+
+    /// @dev L-1: a provider that reverts without data leaves nothing to re-raise, so the
+    /// trigger still reports `NoFlashLoanAvailable`.
+    function test_execute_revertsNoFlashLoanAvailableWhenProviderRevertsWithoutData() public {
+        adapter.setHealthFactor(alice, HF_BELOW_THRESHOLD);
+        flashLoan.setRevertOnFlashBorrow(true, "");
+
+        address[] memory providers = _buildFlashProviders();
+
         vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
         vm.prank(keeper);
         core.execute(
             alice, PROTOCOL_KEY, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
+        );
+    }
+
+    /// @dev M-6: no debt in `debtAsset` stops the trigger instead of skipping the repay limit.
+    function test_execute_revertsWhenUserHasNoDebtInDebtAsset() public {
+        adapter.setDebt(alice, address(debtToken), 0);
+
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.NoDebtToRepay.selector, alice, address(debtToken)));
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            PROTOCOL_KEY,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            _buildFlashProviders(),
+            address(dex),
+            ""
         );
     }
 
@@ -546,11 +585,13 @@ contract SepehrCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
 
-        // SepehrCore wraps the flash provider call in try/catch, so the inner
-        // NoCanonicalRoute bubbles up as NoFlashLoanAvailable — either way the trigger
-        // is blocked, which is the property that matters for the strict-mode guarantee.
+        // L-1: the flash provider's try/catch re-raises the callback's own error.
         vm.prank(keeper);
-        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SepehrErrors.NoCanonicalRoute.selector, address(dex), address(collateralToken), address(debtToken)
+            )
+        );
         core.execute(
             alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
@@ -587,7 +628,7 @@ contract SepehrCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
         vm.prank(keeper);
-        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
+        vm.expectRevert(bytes("MockDex: slippage"));
         core.execute(
             alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
@@ -618,7 +659,7 @@ contract SepehrCoreTriggersTest is Test {
 
     /// @dev C1: cross-asset triggers size the collateral withdrawal via an inverse oracle
     /// projection, so BOTH sides must be registered. Missing either oracle reverts via
-    /// `MissingAssetOracle`, wrapped by the flash-loan try/catch into `NoFlashLoanAvailable`.
+    /// `MissingAssetOracle`, re-raised as is by the flash-loan try/catch (L-1).
     /// (Previously the oracle-floor check was advisory and the trigger would silently run on
     /// keeper-sized input — that was the unit-conflation bug C1 now closes.)
     function test_execute_crossAsset_revertsWhenOnlyOneSideOracleRegistered() public {
@@ -633,15 +674,14 @@ contract SepehrCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
         vm.prank(keeper);
-        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.MissingAssetOracle.selector, address(debtToken)));
         core.execute(
             alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
     }
 
     /// @dev Strict oracle pricing: a missing oracle for either side must block the
-    /// trigger outright. The inner `MissingAssetOracle` revert is wrapped by the
-    /// flash-loan try/catch into `NoFlashLoanAvailable`.
+    /// trigger outright. The inner `MissingAssetOracle` revert reaches the keeper as is (L-1).
     function test_execute_strictOracle_revertsWhenOracleMissing() public {
         bytes32 seqKey = keccak256("SEQ_ORACLE_STRICT_MISSING");
         _setupForSwap(seqKey);
@@ -651,7 +691,7 @@ contract SepehrCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
         vm.prank(keeper);
-        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.MissingAssetOracle.selector, address(collateralToken)));
         core.execute(
             alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
@@ -701,7 +741,11 @@ contract SepehrCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
         vm.prank(keeper);
-        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SepehrErrors.StaleOraclePrice.selector, address(collateralToken), uint256(10_000), block.timestamp
+            )
+        );
         core.execute(
             alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
@@ -723,10 +767,259 @@ contract SepehrCoreTriggersTest is Test {
 
         address[] memory providers = _buildFlashProviders();
         vm.prank(keeper);
-        vm.expectRevert(SepehrErrors.NoFlashLoanAvailable.selector);
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.InvalidOraclePrice.selector, address(debtToken), int256(0)));
         core.execute(
             alice, seqKey, address(debtToken), address(collateralToken), REPAY_AMOUNT, providers, address(dex), ""
         );
+    }
+
+    // ─── H-3 / L-2 / I-1: what a trigger keeps, returns and reports ───────
+
+    /// @dev Debt asset the core keeps from a trigger: the flash loan, its fee and the Shield fee.
+    function _owed(
+        uint256 repay
+    ) internal view returns (uint256) {
+        return repay + Percentages.applyBps(repay, flashLoan.feeBps()) + Percentages.applyBps(repay, SHIELD_FEE_BPS);
+    }
+
+    function _protectWith(
+        bytes32 key,
+        address adapter_
+    ) internal {
+        vm.prank(timelock);
+        core.addAdapter(key, adapter_);
+        vm.prank(alice);
+        core.enableProtection(key, THRESHOLD_HF, 250, 2500);
+    }
+
+    function _registerParityOracles() internal {
+        MockChainlinkAggregator collAgg = new MockChainlinkAggregator(8, 1e8);
+        MockChainlinkAggregator debtAgg = new MockChainlinkAggregator(8, 1e8);
+        vm.startPrank(timelock);
+        core.setAssetOracle(address(collateralToken), address(collAgg), 1 hours);
+        core.setAssetOracle(address(debtToken), address(debtAgg), 1 hours);
+        vm.stopPrank();
+    }
+
+    /// @dev I-1: `Triggered.collateralWithdrawn` reports what left the position.
+    function test_execute_reportsCollateralWithdrawn() public {
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        seqAdapter.setDelegation(alice, true);
+        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
+        bytes32 seqKey = keccak256("SEQ_I1");
+        _protectWith(seqKey, address(seqAdapter));
+
+        uint256 totalFee = Percentages.applyBps(REPAY_AMOUNT, SHIELD_FEE_BPS);
+        vm.expectEmit(true, true, true, true, address(core));
+        emit SepehrEvents.Triggered(
+            alice, seqKey, keeper, REPAY_AMOUNT, _owed(REPAY_AMOUNT), HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD, totalFee
+        );
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            _buildFlashProviders(),
+            address(dex),
+            ""
+        );
+    }
+
+    /// @dev H-3: the slippage headroom a fair swap did not use goes to the user, not the owner.
+    function test_execute_returnsUnusedSlippageHeadroomToUser() public {
+        bytes32 seqKey = keccak256("SEQ_H3");
+        _setupForSwap(seqKey);
+        _registerParityOracles();
+
+        uint256 owed = _owed(REPAY_AMOUNT);
+        // Parity oracles: the core withdraws `owed` grossed up by the 2.5% slippage and MockDex
+        // swaps it 1:1, so everything above `owed` is unused headroom.
+        uint256 headroom = Math.mulDiv(owed, 10_000, 10_000 - 250, Math.Rounding.Ceil) - owed;
+        uint256 aliceBefore = debtToken.balanceOf(alice);
+
+        vm.expectEmit(true, true, false, true, address(core));
+        emit SepehrEvents.SurplusReturned(alice, address(debtToken), headroom);
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            _buildFlashProviders(),
+            address(dex),
+            ""
+        );
+
+        assertEq(debtToken.balanceOf(alice) - aliceBefore, headroom, "headroom returned to the user");
+        (uint256 ownerShare,) = Percentages.splitFee(Percentages.applyBps(REPAY_AMOUNT, SHIELD_FEE_BPS));
+        assertEq(core.ownerFeeBalances(address(debtToken)), ownerShare, "owner keeps only the trigger fee");
+    }
+
+    /// @dev L-2: collateral the router hands back unspent goes to the user, and the core counts
+    /// what it received rather than what the router reports.
+    function test_execute_returnsCollateralTheRouterLeftUnspent() public {
+        bytes32 seqKey = keccak256("SEQ_L2_ROUTER");
+        _setupForSwap(seqKey);
+        _registerParityOracles();
+        LeftoverDex leftoverDex = new LeftoverDex();
+        leftoverDex.configure(9000, 1.2e18);
+        debtToken.mint(address(leftoverDex), REPAY_AMOUNT * 2);
+        vm.prank(timelock);
+        core.addDexRouter(address(leftoverDex));
+
+        uint256 owed = _owed(REPAY_AMOUNT);
+        uint256 collateralNeeded = Math.mulDiv(owed, 10_000, 10_000 - 250, Math.Rounding.Ceil);
+        uint256 pulled = (collateralNeeded * 9000) / 10_000;
+        uint256 received = (pulled * 1.2e18) / 1e18;
+        uint256 collateralBefore = collateralToken.balanceOf(alice);
+        uint256 debtBefore = debtToken.balanceOf(alice);
+
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            _buildFlashProviders(),
+            address(leftoverDex),
+            ""
+        );
+
+        assertEq(collateralToken.balanceOf(alice) - collateralBefore, collateralNeeded - pulled, "unspent collateral");
+        assertEq(debtToken.balanceOf(alice) - debtBefore, received - owed, "measured swap surplus");
+    }
+
+    /// @dev L-2: a repay surplus the adapter sweeps back to the core goes to the user.
+    function test_execute_returnsAdapterRepaySurplusToUser() public {
+        RefundingRepayAdapter refunding = new RefundingRepayAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD, 100e18);
+        refunding.setDelegation(alice, true);
+        debtToken.mint(address(refunding), REPAY_AMOUNT * 10);
+        bytes32 seqKey = keccak256("SEQ_L2_REPAY");
+        _protectWith(seqKey, address(refunding));
+        uint256 aliceBefore = debtToken.balanceOf(alice);
+
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            _buildFlashProviders(),
+            address(dex),
+            ""
+        );
+
+        assertEq(debtToken.balanceOf(alice) - aliceBefore, 100e18);
+    }
+
+    /// @dev A withdrawal short of what the trigger owes reverts with the shortfall.
+    function test_execute_revertsWhenProceedsFallShortOfOwed() public {
+        ShortWithdrawAdapter short = new ShortWithdrawAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        short.setDelegation(alice, true);
+        debtToken.mint(address(short), REPAY_AMOUNT * 10);
+        bytes32 seqKey = keccak256("SEQ_SHORT");
+        _protectWith(seqKey, address(short));
+
+        uint256 owed = _owed(REPAY_AMOUNT);
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.InsufficientRescueProceeds.selector, owed - 1, owed));
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(debtToken),
+            REPAY_AMOUNT,
+            _buildFlashProviders(),
+            address(dex),
+            ""
+        );
+    }
+
+    // ─── L-5: L2 sequencer uptime ─────────────────────────────────────
+
+    /// @dev A cross-asset trigger with parity oracles and a sequencer feed reporting `answer`
+    /// since `startedAt`.
+    function _triggerSwapWithSequencer(
+        int256 answer,
+        uint256 startedAt
+    ) internal {
+        bytes32 seqKey = keccak256(abi.encode("SEQ_L5", answer, startedAt));
+        _setupForSwap(seqKey);
+        _registerParityOracles();
+        MockChainlinkAggregator sequencer = new MockChainlinkAggregator(0, answer);
+        sequencer.setUpdatedAt(startedAt);
+        vm.prank(timelock);
+        core.setSequencerUptimeFeed(address(sequencer));
+
+        vm.prank(keeper);
+        core.execute(
+            alice,
+            seqKey,
+            address(debtToken),
+            address(collateralToken),
+            REPAY_AMOUNT,
+            _buildFlashProviders(),
+            address(dex),
+            ""
+        );
+    }
+
+    function test_execute_revertsWhileTheSequencerIsDown() public {
+        vm.expectRevert(SepehrErrors.SequencerDown.selector);
+        this.triggerSwapWithSequencer(1, block.timestamp - 2 hours);
+    }
+
+    function test_execute_revertsOnAnInvalidSequencerRound() public {
+        vm.expectRevert(SepehrErrors.SequencerDown.selector);
+        this.triggerSwapWithSequencer(0, 0);
+    }
+
+    function test_execute_revertsDuringTheSequencerGracePeriod() public {
+        uint256 upSince = block.timestamp - 30 minutes;
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.SequencerGracePeriodNotOver.selector, upSince));
+        this.triggerSwapWithSequencer(0, upSince);
+    }
+
+    function test_execute_runsOnceTheSequencerHasBeenUpPastTheGracePeriod() public {
+        _triggerSwapWithSequencer(0, block.timestamp - 2 hours);
+    }
+
+    /// @dev External hop so `vm.expectRevert` sees the trigger's revert, not the setup calls.
+    function triggerSwapWithSequencer(
+        int256 answer,
+        uint256 startedAt
+    ) external {
+        _triggerSwapWithSequencer(answer, startedAt);
+    }
+
+    // ─── I-2: repay share floor ───────────────────────────────────────
+
+    function test_enableProtection_revertsBelowTheMinimumRepayShare() public {
+        bytes32 key = keccak256("I2_ENABLE");
+        vm.prank(timelock);
+        core.addAdapter(key, address(adapter));
+
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.RepayPercentTooLow.selector, 0, 100));
+        vm.prank(alice);
+        core.enableProtection(key, THRESHOLD_HF, 250, 0);
+
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.RepayPercentTooLow.selector, 99, 100));
+        vm.prank(alice);
+        core.enableProtection(key, THRESHOLD_HF, 250, 99);
+
+        vm.prank(alice);
+        core.enableProtection(key, THRESHOLD_HF, 250, 100);
+    }
+
+    function test_updateProtection_revertsBelowTheMinimumRepayShare() public {
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.RepayPercentTooLow.selector, 0, 100));
+        vm.prank(alice);
+        core.updateProtection(PROTOCOL_KEY, THRESHOLD_HF, 250, 0);
     }
 
     /// @dev Internal helper — wires a fresh SequentialMockAdapter under `seqKey`,
@@ -913,10 +1206,86 @@ contract SepehrCoreTriggersTest is Test {
         assertEq(list.length, 0);
     }
 
+    // ─── H-2: partial rescues and re-triggers in a falling market ─────────
+
+    function _protectWithSequence(
+        bytes32 key,
+        uint256 initialHF,
+        uint256 postRepayHF
+    ) internal returns (SequentialMockAdapter seqAdapter) {
+        seqAdapter = new SequentialMockAdapter(initialHF, postRepayHF);
+        seqAdapter.setDelegation(alice, true);
+        debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
+        debtToken.mint(address(flashLoan), REPAY_AMOUNT * 10);
+        _protectWith(key, address(seqAdapter));
+    }
+
+    function _trigger(
+        bytes32 key
+    ) internal {
+        vm.prank(keeper);
+        core.execute(
+            alice, key, address(debtToken), address(debtToken), REPAY_AMOUNT, _buildFlashProviders(), address(dex), ""
+        );
+    }
+
+    /// @dev H-2: a rescue that improves the HF is accepted even when it does not clear the
+    /// threshold, and the HF it leaves is recorded.
+    function test_execute_acceptsPartialRescueBelowThreshold() public {
+        bytes32 key = keccak256("H2_PARTIAL");
+        _protectWithSequence(key, HF_BELOW_THRESHOLD, HF_PARTIAL_RESCUE);
+
+        _trigger(key);
+
+        assertEq(core.lastTriggerHealthFactor(alice, key), HF_PARTIAL_RESCUE);
+        assertEq(core.lastTriggerTime(alice, key), block.timestamp);
+    }
+
+    /// @dev H-2: inside the cooldown, a HF 1% below what the last trigger left re-opens it.
+    function test_execute_retriggersDuringCooldownWhenHealthFactorFallsFurther() public {
+        bytes32 key = keccak256("H2_RETRIGGER");
+        SequentialMockAdapter seqAdapter = _protectWithSequence(key, HF_BELOW_THRESHOLD, HF_PARTIAL_RESCUE);
+        _trigger(key);
+
+        vm.warp(block.timestamp + 20 minutes);
+        uint256 retriggerBelow = (HF_PARTIAL_RESCUE * (10_000 - core.RETRIGGER_HF_DROP_BPS())) / 10_000;
+        seqAdapter.reset(retriggerBelow - 1, HF_PARTIAL_RESCUE);
+        _trigger(key);
+
+        assertEq(core.lastTriggerTime(alice, key), block.timestamp);
+    }
+
+    /// @dev H-2: at exactly the 1% line the cooldown still holds.
+    function test_execute_cooldownHoldsAtTheRetriggerLine() public {
+        bytes32 key = keccak256("H2_LINE");
+        SequentialMockAdapter seqAdapter = _protectWithSequence(key, HF_BELOW_THRESHOLD, HF_PARTIAL_RESCUE);
+        _trigger(key);
+
+        vm.warp(block.timestamp + 20 minutes);
+        uint256 retriggerBelow = (HF_PARTIAL_RESCUE * (10_000 - core.RETRIGGER_HF_DROP_BPS())) / 10_000;
+        seqAdapter.reset(retriggerBelow, HF_PARTIAL_RESCUE);
+
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.CooldownActive.selector, 40 minutes));
+        _trigger(key);
+    }
+
+    /// @dev H09 still holds: a trigger that does not raise the HF reverts.
+    function test_execute_revertsWhenRescueDoesNotImproveHealthFactor() public {
+        bytes32 key = keccak256("H2_NO_IMPROVEMENT");
+        _protectWithSequence(key, HF_BELOW_THRESHOLD, HF_BELOW_THRESHOLD);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SepehrErrors.HealthFactorNotImproved.selector, HF_BELOW_THRESHOLD, HF_BELOW_THRESHOLD
+            )
+        );
+        _trigger(key);
+    }
+
     /// @dev A16: the same-protocol cooldown still gates re-entry. Once A16 keys cooldown by
     /// protocolKey, firing twice on the same key within COOLDOWN_SECONDS must still revert.
     function test_execute_sameProtocolCooldownStillEnforced() public {
-        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        SequentialMockAdapter seqAdapter = new SequentialMockAdapter(HF_BELOW_THRESHOLD, HF_PARTIAL_RESCUE);
         seqAdapter.setDelegation(alice, true);
         debtToken.mint(address(seqAdapter), REPAY_AMOUNT * 10);
         bytes32 seqKey = keccak256("SAME_KEY_COOLDOWN");
@@ -931,8 +1300,8 @@ contract SepehrCoreTriggersTest is Test {
         vm.prank(keeper);
         core.execute(alice, seqKey, address(debtToken), address(debtToken), REPAY_AMOUNT, providers, address(dex), "");
 
-        // Reset adapter HF back below threshold for the retry.
-        seqAdapter.reset(HF_BELOW_THRESHOLD, HF_ABOVE_THRESHOLD);
+        // Retry while the HF still sits where the trigger left it (H-2: no 1% drop).
+        seqAdapter.reset(HF_PARTIAL_RESCUE, HF_ABOVE_THRESHOLD);
         debtToken.mint(address(flashLoan), REPAY_AMOUNT * 2);
 
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.CooldownActive.selector, 3600));
@@ -1026,7 +1395,7 @@ contract SequentialMockAdapter {
         address,
         address debtAsset,
         uint256 amount
-    ) external {
+    ) external virtual {
         ERC20(debtAsset).transfer(address(0xdead), amount);
         currentHF = postRepayHF;
     }
@@ -1036,7 +1405,7 @@ contract SequentialMockAdapter {
         address collateralAsset,
         uint256 amount,
         address recipient
-    ) external {
+    ) external virtual {
         ERC20(collateralAsset).transfer(recipient, amount);
     }
 
@@ -1046,10 +1415,89 @@ contract SequentialMockAdapter {
         return 10_000e8; // $10k — below Shield tier cap ($15k) so execute() passes H01 check
     }
 
+    /// @dev M-6: SepehrCore rejects a zero debt, so the mock owes enough for any test repay.
     function getDebt(
         address,
         address
     ) external pure returns (uint256) {
-        return 0;
+        return 1_000_000e18;
+    }
+}
+
+/// @notice L-2: repays like AaveV3Adapter does when asked for more than the debt, sweeping
+/// `refund` of the repay amount back to the core.
+contract RefundingRepayAdapter is SequentialMockAdapter {
+    uint256 public immutable refund;
+
+    constructor(
+        uint256 _initialHF,
+        uint256 _postRepayHF,
+        uint256 _refund
+    ) SequentialMockAdapter(_initialHF, _postRepayHF) {
+        refund = _refund;
+    }
+
+    function repay(
+        address,
+        address debtAsset,
+        uint256 amount
+    ) external override {
+        ERC20(debtAsset).transfer(address(0xdead), amount - refund);
+        ERC20(debtAsset).transfer(msg.sender, refund);
+        currentHF = postRepayHF;
+    }
+}
+
+/// @notice Delivers one unit less collateral than asked, like a fee-on-transfer token.
+contract ShortWithdrawAdapter is SequentialMockAdapter {
+    constructor(
+        uint256 _initialHF,
+        uint256 _postRepayHF
+    ) SequentialMockAdapter(_initialHF, _postRepayHF) {}
+
+    function withdrawCollateral(
+        address,
+        address collateralAsset,
+        uint256 amount,
+        address recipient
+    ) external override {
+        ERC20(collateralAsset).transfer(recipient, amount - 1);
+    }
+}
+
+/// @notice L-2: consumes `pullBps` of the input, pays `rateWad` per unit consumed, and reports
+/// twice what it paid, so a test can tell measured balances from the router's own claim.
+contract LeftoverDex is IDexRouter {
+    uint256 public pullBps = 10_000;
+    uint256 public rateWad = 1e18;
+
+    function configure(
+        uint256 _pullBps,
+        uint256 _rateWad
+    ) external {
+        pullBps = _pullBps;
+        rateWad = _rateWad;
+    }
+
+    function swap(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256,
+        bytes calldata
+    ) external returns (uint256) {
+        uint256 pulled = (amountIn * pullBps) / 10_000;
+        ERC20(tokenIn).transferFrom(msg.sender, address(this), pulled);
+        uint256 out = (pulled * rateWad) / 1e18;
+        ERC20(tokenOut).transfer(msg.sender, out);
+        return out * 2;
+    }
+
+    function getQuote(
+        address,
+        address,
+        uint256 amountIn
+    ) external view returns (uint256) {
+        return (amountIn * rateWad) / 1e18;
     }
 }

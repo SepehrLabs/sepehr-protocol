@@ -49,6 +49,8 @@ contract SepehrCoreHandler is Test {
     uint256 public disableProtectionCalls;
     uint256 public executeCalls;
     uint256 public executeReverts;
+    uint256 public refreshCalls;
+    uint256 public releaseCalls;
 
     constructor(
         SepehrCore _core,
@@ -150,6 +152,42 @@ contract SepehrCoreHandler is Test {
         vm.prank(actor);
         try core.disableProtection(PROTOCOL_KEY) {
             disableProtectionCalls++;
+        } catch {}
+    }
+
+    /// @dev Moves an actor's collateral so enables clear the $500 floor and snapshots drift.
+    function setCollateral(
+        uint256 actorSeed,
+        uint256 valueUsd
+    ) external {
+        adapter.setCollateralValueUsd(_getActor(actorSeed), bound(valueUsd, 0, 400_000e8));
+    }
+
+    /// @dev M-2: anyone re-reads a position's snapshot.
+    function refreshSnapshot(
+        uint256 actorSeed,
+        uint256 callerSeed
+    ) external {
+        address actor = _getActor(actorSeed);
+        if (!core.getProtection(actor, PROTOCOL_KEY).enabled) return;
+
+        vm.prank(_getActor(callerSeed));
+        try core.refreshCollateralSnapshot(actor, PROTOCOL_KEY) {
+            refreshCalls++;
+        } catch {}
+    }
+
+    /// @dev M-2: anyone releases an expired subscription's protections.
+    function releaseExpired(
+        uint256 actorSeed,
+        uint256 callerSeed
+    ) external {
+        address actor = _getActor(actorSeed);
+        if (core.getSubscription(actor).expiresAt > block.timestamp) return;
+
+        vm.prank(_getActor(callerSeed));
+        try core.releaseExpiredProtections(actor) {
+            releaseCalls++;
         } catch {}
     }
 

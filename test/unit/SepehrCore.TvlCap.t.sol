@@ -74,10 +74,11 @@ contract SepehrCoreTvlCapTest is Test {
         vm.prank(bob);
         usdc.approve(address(core), type(uint256).max);
 
+        // Watchtower ($300k tier cap) so the protocol-wide cap, not the tier cap, is what binds.
         vm.prank(alice);
-        core.subscribe(1, false);
+        core.subscribe(3, false);
         vm.prank(bob);
-        core.subscribe(1, false);
+        core.subscribe(3, false);
 
         adapter.setDelegation(alice, true);
         adapter.setDelegation(bob, true);
@@ -170,8 +171,12 @@ contract SepehrCoreTvlCapTest is Test {
         vm.prank(timelock);
         core.setTvlCapUsd(type(uint256).max);
 
-        adapter.setCollateralValueUsd(alice, 1_000_000_000e8); // absurd value
-        vm.prank(alice);
+        // Only Titan's tier cap is unlimited.
+        address titan = makeAddr("titan");
+        core.grantTitanSubscription(titan, 30 days);
+        adapter.setDelegation(titan, true);
+        adapter.setCollateralValueUsd(titan, 1_000_000_000e8); // absurd value
+        vm.prank(titan);
         core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
         assertEq(core.protectedCollateralUsd(), 1_000_000_000e8);
     }
@@ -287,5 +292,85 @@ contract SepehrCoreTvlCapTest is Test {
 
         assertEq(core.protectedCollateralUsd(), 40_000e8);
         assertEq(core.protectionCollateralSnapshot(alice, PROTOCOL_KEY_AAVE), 40_000e8);
+    }
+
+    // ─── M-2 / L-8: tier cap at enable, release and refresh ───────────
+
+    /// @dev L-8: a position above the tier cap is refused at enable instead of being counted
+    /// against the TVL cap and never rescued.
+    function test_enableProtection_revertsAboveTheTierCap() public {
+        address shield = makeAddr("shield");
+        usdc.mint(shield, 100e6);
+        vm.startPrank(shield);
+        usdc.approve(address(core), type(uint256).max);
+        core.subscribe(1, false);
+        vm.stopPrank();
+        adapter.setDelegation(shield, true);
+        adapter.setCollateralValueUsd(shield, 15_000e8 + 1);
+
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.TierCollateralCapExceeded.selector, 15_000e8 + 1, 15_000e8));
+        vm.prank(shield);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+    }
+
+    /// @dev M-2 (audit PoC): collateral borrowed for the enable call and withdrawn right after
+    /// no longer keeps the cap filled: anyone can refresh the snapshot.
+    function test_refreshCollateralSnapshot_freesCollateralWithdrawnAfterEnable() public {
+        adapter.setCollateralValueUsd(alice, TVL_CAP_75K_USD8);
+        vm.prank(alice);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        adapter.setCollateralValueUsd(alice, 0);
+
+        vm.expectEmit(true, true, false, true, address(core));
+        emit SepehrEvents.CollateralSnapshotRefreshed(alice, PROTOCOL_KEY_AAVE, TVL_CAP_75K_USD8, 0);
+        vm.prank(makeAddr("anyone"));
+        core.refreshCollateralSnapshot(alice, PROTOCOL_KEY_AAVE);
+
+        assertEq(core.protectedCollateralUsd(), 0);
+        assertEq(core.protectionCollateralSnapshot(alice, PROTOCOL_KEY_AAVE), 0);
+
+        adapter.setCollateralValueUsd(bob, 50_000e8);
+        vm.prank(bob);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+    }
+
+    function test_refreshCollateralSnapshot_followsAGrowingPosition() public {
+        adapter.setCollateralValueUsd(alice, 10_000e8);
+        vm.prank(alice);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        adapter.setCollateralValueUsd(alice, 25_000e8);
+
+        core.refreshCollateralSnapshot(alice, PROTOCOL_KEY_AAVE);
+
+        assertEq(core.protectedCollateralUsd(), 25_000e8);
+    }
+
+    function test_refreshCollateralSnapshot_revertsWithoutProtection() public {
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.ProtectionNotEnabled.selector, alice, PROTOCOL_KEY_AAVE));
+        core.refreshCollateralSnapshot(alice, PROTOCOL_KEY_AAVE);
+    }
+
+    /// @dev M-2: an expired subscription's protections can be released by anyone.
+    function test_releaseExpiredProtections_returnsTheirShareOfTheCap() public {
+        adapter.setCollateralValueUsd(alice, 30_000e8);
+        vm.startPrank(alice);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_MORPHO, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        vm.stopPrank();
+        vm.warp(block.timestamp + 31 days);
+
+        vm.expectEmit(true, false, false, true, address(core));
+        emit SepehrEvents.UserProtectionsCleared(alice, 2);
+        vm.prank(makeAddr("anyone"));
+        core.releaseExpiredProtections(alice);
+
+        assertEq(core.protectedCollateralUsd(), 0);
+        assertFalse(core.getProtection(alice, PROTOCOL_KEY_AAVE).enabled);
+        assertEq(core.getUserProtocols(alice).length, 0);
+    }
+
+    function test_releaseExpiredProtections_revertsWhileTheSubscriptionIsActive() public {
+        vm.expectRevert(SepehrErrors.SubscriptionAlreadyActive.selector);
+        core.releaseExpiredProtections(alice);
     }
 }

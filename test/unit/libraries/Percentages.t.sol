@@ -19,15 +19,6 @@ contract PercentagesTest is Test {
         assertEq(Percentages.applyBps(0, 5000), 0);
     }
 
-    function test_applyBpsRoundUp_roundsUp() public pure {
-        // 1 * 1 / 10000 = 0.0001 -> rounds up to 1
-        assertEq(Percentages.applyBpsRoundUp(1, 1), 1);
-    }
-
-    function test_applyBpsRoundUp_exact() public pure {
-        assertEq(Percentages.applyBpsRoundUp(10_000, 5000), 5000);
-    }
-
     function test_toBps() public pure {
         assertEq(Percentages.toBps(30, 10_000), 30);
         assertEq(Percentages.toBps(5000, 10_000), 5000);

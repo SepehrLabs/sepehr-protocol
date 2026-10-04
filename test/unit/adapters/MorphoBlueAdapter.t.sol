@@ -2,9 +2,12 @@
 pragma solidity ^0.8.28;
 
 import {MorphoBlueAdapter} from "../../../src/adapters/MorphoBlueAdapter.sol";
+import {IMorpho} from "../../../src/interfaces/external/IMorpho.sol";
 import {SepehrErrors} from "../../../src/libraries/SepehrErrors.sol";
+import {MockChainlinkAggregator} from "../../helpers/MockChainlinkAggregator.sol";
 import {MockERC20} from "../../helpers/MockERC20.sol";
 import {MockMorpho, MockMorphoOracle} from "../../helpers/MockMorpho.sol";
+import {MockTokenDecimals} from "../../helpers/MockTokenDecimals.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract MorphoBlueAdapterTest is Test {
@@ -13,6 +16,8 @@ contract MorphoBlueAdapterTest is Test {
     MockMorphoOracle oracle;
     MockERC20 loanToken;
     MockERC20 collateralToken;
+    /// @dev Loan-token USD feed: $1, 8 decimals.
+    MockChainlinkAggregator loanFeed;
 
     bytes32 constant MARKET_ID = keccak256("test-market");
     address user = makeAddr("user");
@@ -35,7 +40,8 @@ contract MorphoBlueAdapterTest is Test {
             0.8e18 // 80% LLTV
         );
 
-        adapter = new MorphoBlueAdapter(address(morpho), MARKET_ID, core);
+        loanFeed = new MockChainlinkAggregator(8, 1e8);
+        adapter = new MorphoBlueAdapter(address(morpho), MARKET_ID, address(loanFeed), core);
     }
 
     // ── Constructor ──────────────────────────────────────────────────────
@@ -48,17 +54,17 @@ contract MorphoBlueAdapterTest is Test {
 
     function test_constructor_revertsOnZeroMorpho() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new MorphoBlueAdapter(address(0), MARKET_ID, core);
+        new MorphoBlueAdapter(address(0), MARKET_ID, address(loanFeed), core);
     }
 
     function test_constructor_revertsOnZeroMarketId() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new MorphoBlueAdapter(address(morpho), bytes32(0), core);
+        new MorphoBlueAdapter(address(morpho), bytes32(0), address(loanFeed), core);
     }
 
     function test_constructor_revertsOnZeroCore() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new MorphoBlueAdapter(address(morpho), MARKET_ID, address(0));
+        new MorphoBlueAdapter(address(morpho), MARKET_ID, address(loanFeed), address(0));
     }
 
     // ── getHealthFactor ──────────────────────────────────────────────────
@@ -225,8 +231,8 @@ contract MorphoBlueAdapterTest is Test {
 
         uint256 value = adapter.getCollateralValueUsd(user);
 
-        // 10e18 * 2000e36 / 1e36 = 20_000e18
-        assertEq(value, 20_000e18);
+        // 10e18 * 2000e36 / 1e36 = 20_000e18 loan units at $1 = $20,000 in USD-8
+        assertEq(value, 20_000e8);
     }
 
     function test_getCollateralValueUsd_zeroWhenNoCollateral() public {
@@ -238,10 +244,108 @@ contract MorphoBlueAdapterTest is Test {
         morpho.setPosition(MARKET_ID, user, 0, 0, 5e18);
 
         oracle.setPrice(1000e36);
-        assertEq(adapter.getCollateralValueUsd(user), 5000e18);
+        assertEq(adapter.getCollateralValueUsd(user), 5000e8);
 
         oracle.setPrice(3000e36);
-        assertEq(adapter.getCollateralValueUsd(user), 15_000e18);
+        assertEq(adapter.getCollateralValueUsd(user), 15_000e8);
+    }
+
+    // ── M-4: collateral in USD-8 ─────────────────────────────────────────
+
+    function test_constructor_revertsOnZeroLoanFeed() public {
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        new MorphoBlueAdapter(address(morpho), MARKET_ID, address(0), core);
+    }
+
+    function test_constructor_revertsOnAFeedWithOtherDecimals() public {
+        MockChainlinkAggregator eighteen = new MockChainlinkAggregator(18, 1e18);
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.InvalidOracleDecimals.selector, 18, 8));
+        new MorphoBlueAdapter(address(morpho), MARKET_ID, address(eighteen), core);
+    }
+
+    /// @dev M-4 (audit PoC): with a 6-decimal USDC loan token, a $30,000 position read as $300.
+    function test_getCollateralValueUsd_quotesA6DecimalLoanTokenInUsd8() public {
+        MockTokenDecimals usdc6 = new MockTokenDecimals("USDC", "USDC", 6);
+        bytes32 marketId = keccak256("usdc6-market");
+        morpho.setMarketParams(marketId, address(usdc6), address(collateralToken), address(oracle), irm, 0.86e18);
+        MorphoBlueAdapter usdcAdapter = new MorphoBlueAdapter(address(morpho), marketId, address(loanFeed), core);
+
+        // 10 WETH at 3,000 USDC: Morpho prices 1e18 collateral units as 3000e6 loan units.
+        morpho.setPosition(marketId, user, 0, 0, 10e18);
+        oracle.setPrice(3000e6 * 1e36 / 1e18);
+
+        assertEq(usdcAdapter.getCollateralValueUsd(user), 30_000e8);
+    }
+
+    function test_getCollateralValueUsd_followsTheLoanTokenPrice() public {
+        morpho.setPosition(MARKET_ID, user, 0, 0, 10e18);
+        oracle.setPrice(2000e36);
+        loanFeed.setAnswer(0.99e8);
+
+        assertEq(adapter.getCollateralValueUsd(user), 19_800e8);
+    }
+
+    function test_getCollateralValueUsd_revertsOnANonPositiveFeedAnswer() public {
+        morpho.setPosition(MARKET_ID, user, 0, 0, 10e18);
+        oracle.setPrice(2000e36);
+        loanFeed.setAnswer(0);
+
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.InvalidOraclePrice.selector, address(loanToken), int256(0)));
+        adapter.getCollateralValueUsd(user);
+    }
+
+    // ── I-5: interest accrued since the market's last update ─────────────
+
+    /// @dev Borrow total after `elapsed` seconds at `rate` per second, as Morpho books it.
+    function _accrued(
+        uint256 totalBorrowAssets,
+        uint256 rate,
+        uint256 elapsed
+    ) internal pure returns (uint256) {
+        uint256 first = rate * elapsed;
+        uint256 second = first * first / 2e18;
+        uint256 third = second * first / 3e18;
+        return totalBorrowAssets + totalBorrowAssets * (first + second + third) / 1e18;
+    }
+
+    function test_getDebt_includesInterestAccruedSinceTheLastUpdate() public {
+        MockIrm rateModel = new MockIrm(1e18 / uint256(365 days) / 10); // ~10% a year
+        morpho.setMarketParams(
+            MARKET_ID, address(loanToken), address(collateralToken), address(oracle), address(rateModel), 0.8e18
+        );
+        morpho.setPosition(MARKET_ID, user, 0, 1000, 10e18);
+        vm.warp(400 days);
+        morpho.setMarket(MARKET_ID, 10_000e18, 10_000e18, 5000e18, 1000, uint128(block.timestamp - 30 days), 0);
+
+        uint256 expected = _accrued(5000e18, rateModel.rate(), 30 days);
+        assertGt(expected, 5000e18);
+        assertEq(adapter.getDebt(user, address(loanToken)), expected);
+    }
+
+    function test_getHealthFactor_accountsForAccruedInterest() public {
+        MockIrm rateModel = new MockIrm(1e18 / uint256(365 days) / 10);
+        morpho.setMarketParams(
+            MARKET_ID, address(loanToken), address(collateralToken), address(oracle), address(rateModel), 0.8e18
+        );
+        morpho.setPosition(MARKET_ID, user, 0, 1000, 10e18);
+        oracle.setPrice(1000e36);
+        vm.warp(400 days);
+        morpho.setMarket(MARKET_ID, 10_000e18, 10_000e18, 5000e18, 1000, uint128(block.timestamp - 30 days), 0);
+
+        uint256 borrowed = _accrued(5000e18, rateModel.rate(), 30 days);
+        // collateralQuoted = 10e18 * 1000e36 / 1e36 = 10_000e18; HF = 10_000e18 * 0.8e18 / borrowed
+        assertEq(adapter.getHealthFactor(user), 10_000e18 * 0.8e18 / borrowed);
+    }
+
+    function test_getDebt_withoutAnIrmAccruesNothing() public {
+        morpho.setMarketParams(
+            MARKET_ID, address(loanToken), address(collateralToken), address(oracle), address(0), 0.8e18
+        );
+        morpho.setPosition(MARKET_ID, user, 0, 1000, 10e18);
+        vm.warp(400 days);
+        morpho.setMarket(MARKET_ID, 10_000e18, 10_000e18, 5000e18, 1000, uint128(block.timestamp - 30 days), 0);
+
+        assertEq(adapter.getDebt(user, address(loanToken)), 5000e18);
     }
 
     // ── Fuzz tests ───────────────────────────────────────────────────────
@@ -275,7 +379,7 @@ contract MorphoBlueAdapterTest is Test {
         oracle.setPrice(oraclePrice);
 
         uint256 value = adapter.getCollateralValueUsd(user);
-        assertEq(value, uint256(collateral) * oraclePrice / 1e36);
+        assertEq(value, (uint256(collateral) * oraclePrice / 1e36) * 1e8 / 1e18);
     }
 
     function testFuzz_withdrawCollateral_recordsCorrectArgs(
@@ -290,5 +394,23 @@ contract MorphoBlueAdapterTest is Test {
 
         assertEq(morpho.lastWithdrawAssets(), amount);
         assertEq(morpho.lastWithdrawReceiver(), rcpt);
+    }
+}
+
+/// @notice Constant-rate Morpho interest rate model.
+contract MockIrm {
+    uint256 public immutable rate;
+
+    constructor(
+        uint256 rate_
+    ) {
+        rate = rate_;
+    }
+
+    function borrowRateView(
+        IMorpho.MarketParams memory,
+        IMorpho.Market memory
+    ) external view returns (uint256) {
+        return rate;
     }
 }

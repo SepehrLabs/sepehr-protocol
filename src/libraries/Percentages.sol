@@ -19,14 +19,6 @@ library Percentages {
         return (amount * bps) / BPS_DENOMINATOR;
     }
 
-    /// @notice Apply a bps percentage to an amount, rounding up.
-    function applyBpsRoundUp(
-        uint256 amount,
-        uint256 bps
-    ) internal pure returns (uint256) {
-        return (amount * bps + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
-    }
-
     /// @notice Compute how many bps `part` is of `whole`.
     function toBps(
         uint256 part,

@@ -25,6 +25,9 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     // ─── Constants ───────────────────────────────────────────────
     uint256 public constant MIN_HF_THRESHOLD = 1.2e18;
     uint256 public constant MAX_REPAY_BPS = 5000;
+    /// @notice I-2: lowest repay share a protection accepts. At 0 every trigger reverted with
+    /// `RepayExceedsUserLimit`, a protection paid for that could never act.
+    uint256 public constant MIN_REPAY_BPS = 100;
     /// @notice Maximum slippage a user may configure for collateral→debt swaps during triggers.
     /// @dev Capped at 3% because the swap route and router are keeper-controlled: wider caps
     /// permit a keeper to sandwich their own trigger and capture the difference as MEV. 3% is
@@ -32,6 +35,10 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// should simulate with a tighter bound off-chain.
     uint256 public constant MAX_SLIPPAGE_BPS = 300;
     uint256 public constant COOLDOWN_SECONDS = 3600;
+    /// @notice H-2: during the cooldown a position can be rescued again once its health factor
+    /// has fallen this far (in bps) below what the previous trigger left. 1% ignores the slow
+    /// drift of accruing interest while letting a falling market re-trigger.
+    uint256 public constant RETRIGGER_HF_DROP_BPS = 100;
     uint256 public constant MONTHLY_PERIOD = 30 days;
     uint256 public constant ANNUAL_PERIOD = 365 days;
 
@@ -54,8 +61,8 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
     /// @notice A13: hard ceiling on a single tier-price change, expressed in basis points of
     /// the previous price. Blocks a compromised / hasty timelock proposal from retro-pricing a
-    /// tier to ~0 or 100× in one call — either would silently harm existing subscribers (refund
-    /// math and upgrade credits are pro-rated against the current price). 5000 bps (±50%) lets
+    /// tier to ~0 or 100× in one call — either would silently harm subscribers about to pay at
+    /// the new price (refunds and upgrade credits follow what was paid, M-1). 5000 bps (±50%) lets
     /// governance track USDC depegs or genuine cost changes while forcing a pathological move
     /// to span multiple 48h-delayed proposals (giving subscribers time to unsubscribe in between).
     uint256 public constant MAX_TIER_PRICE_DEVIATION_BPS = 5000;
@@ -65,7 +72,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// timelock, this prevents governance from compounding two back-to-back 50% cuts within
     /// one 96h window (would total a 75% price drop and retro-harm prepaid annual subscribers).
     /// 7 days gives affected subscribers a full week between any two consecutive price shifts
-    /// to exit via `unsubscribe` (which pro-rates against the *current* price).
+    /// to exit via `unsubscribe` (which pro-rates what they paid, M-1).
     uint256 public constant TIER_PRICE_UPDATE_COOLDOWN = 7 days;
 
     /// @notice Maximum duration a single `pause()` call may freeze the contract. A11: without an
@@ -94,6 +101,9 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// a `min`/`max`-decimal normalization step that would otherwise have to run inside the
     /// flash-loan callback.
     uint8 public constant ORACLE_PRICE_DECIMALS = 8;
+    /// @notice L-5: after the L2 sequencer comes back up, prices are not trusted for this long,
+    /// so feeds can catch up before triggers size withdrawals and swaps on them.
+    uint256 public constant SEQUENCER_GRACE_PERIOD = 1 hours;
 
     uint256[3] public TIER_PRICES_MONTHLY_USD_6 = [
         9_000_000, // Shield: $9/mo
@@ -204,6 +214,10 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     }
 
     mapping(address asset => AssetOracle) public assetOracles;
+    /// @notice L-5: Chainlink L2 sequencer uptime feed. While the sequencer is down, or within
+    /// `SEQUENCER_GRACE_PERIOD` of its restart, every oracle read reverts. address(0) disables
+    /// the check, for chains without such a feed (Arbitrum Sepolia).
+    IChainlinkAggregator public sequencerUptimeFeed;
     /// @notice When `true`, swaps in `onFlashLoan` revert if either side of the pair
     /// has no registered oracle. Defaults to `false` so the registry can be populated
     /// pair-by-pair; governance flips the flag once every live pair is covered.
@@ -216,6 +230,16 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     }
 
     mapping(address => Subscription) internal _subscriptions;
+
+    /// @notice M-1: what the user paid for the current subscription window and when that window
+    /// started. Refunds and upgrade credits are pro-rated on it, never on the live tier price,
+    /// so prepaying before a price rise cannot draw more than was paid.
+    struct SubscriptionPayment {
+        uint256 paid;
+        uint256 startedAt;
+    }
+
+    mapping(address user => SubscriptionPayment) public subscriptionPayments;
     mapping(address => mapping(bytes32 => PositionProtection)) internal _protections;
     /// @notice A18: ordered list of protocol keys for which `user` has protection enabled.
     /// Maintained by `enableProtection` (push) and `disableProtection` (swap-pop). `unsubscribe`
@@ -225,6 +249,8 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @notice A16: per-(user, protocol) cooldown timestamp. Keyed by `user` and `protocolKey`
     /// so a trigger on one protocol cannot lock out protection on another.
     mapping(address user => mapping(bytes32 protocolKey => uint256)) public lastTriggerTime;
+    /// @notice H-2: health factor the last trigger left on `(user, protocolKey)`.
+    mapping(address user => mapping(bytes32 protocolKey => uint256)) public lastTriggerHealthFactor;
 
     /// @notice Accrued protocol-owner revenue per token address (debt asset of triggers, USDC for subscriptions).
     /// @dev Per-asset accounting is mandatory because trigger fees accrue in whatever debt asset the user
@@ -242,6 +268,9 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
     address private _activeFlashProvider;
     bytes32 private _activeSessionHash;
+    /// @dev I-1: collateral the flash-loan callback withdrew from the position, read back by
+    /// `execute` for the `Triggered` event.
+    uint256 private transient _collateralWithdrawn;
 
     // ─── Modifiers ───────────────────────────────────────────────
     modifier whenNotPaused() {
@@ -341,6 +370,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
         uint256 duration = annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
         _subscriptions[msg.sender] = Subscription({tier: tier, annual: annual, expiresAt: block.timestamp + duration});
+        subscriptionPayments[msg.sender] = SubscriptionPayment({paid: price, startedAt: block.timestamp});
 
         emit SepehrEvents.Subscribed(msg.sender, block.timestamp + duration, tier, annual, block.chainid);
     }
@@ -356,8 +386,15 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         ownerFeeBalances[address(usdc)] += price;
 
         uint256 duration = sub.annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
-        uint256 baseTime = sub.expiresAt > block.timestamp ? sub.expiresAt : block.timestamp;
-        sub.expiresAt = baseTime + duration;
+        // M-1: an active window grows by this payment; an expired one is fully used up, so the
+        // renewal opens a new window.
+        if (sub.expiresAt > block.timestamp) {
+            subscriptionPayments[msg.sender].paid += price;
+            sub.expiresAt += duration;
+        } else {
+            subscriptionPayments[msg.sender] = SubscriptionPayment({paid: price, startedAt: block.timestamp});
+            sub.expiresAt = block.timestamp + duration;
+        }
 
         emit SepehrEvents.Renewed(msg.sender, sub.expiresAt, sub.tier, sub.annual);
     }
@@ -367,7 +404,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// re-subscribing, which either forfeited the remaining prepaid window (before H25) or
     /// round-tripped funds through the refund path (after H25). `upgradeTier` gives a single
     /// atomic path: the user pays the new tier's price minus a pro-rata credit for the unused
-    /// portion of their existing subscription. The credit is bounded by
+    /// portion of what they paid for their existing subscription (M-1). The credit is bounded by
     /// `ownerFeeBalances[usdc]` so the protocol cannot over-credit a drained treasury.
     /// Downgrades (new price ≤ credit) are allowed and simply refund the difference; same-
     /// tier-same-cadence calls revert with `SameTierUpgrade`. Titan (tier 4) remains
@@ -385,13 +422,8 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         if (sub.tier == 4) revert SepehrErrors.UpgradeTierPathInvalid(4, newTier);
         if (sub.tier == newTier && sub.annual == newAnnual) revert SepehrErrors.SameTierUpgrade();
 
-        uint256 credit;
+        uint256 credit = _unusedSubscriptionValue(msg.sender);
         {
-            uint256 remaining = sub.expiresAt - block.timestamp;
-            uint256 oldDuration = sub.annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
-            uint256 oldPrice =
-                sub.annual ? TIER_PRICES_ANNUAL_USD_6[sub.tier - 1] : TIER_PRICES_MONTHLY_USD_6[sub.tier - 1];
-            credit = (oldPrice * remaining) / oldDuration;
             uint256 avail = ownerFeeBalances[address(usdc)];
             if (credit > avail) credit = avail;
         }
@@ -413,14 +445,16 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         sub.tier = newTier;
         sub.annual = newAnnual;
         sub.expiresAt = block.timestamp + newDuration;
+        // The credit plus what the user paid now (or minus the refund) is the new tier's price.
+        subscriptionPayments[msg.sender] = SubscriptionPayment({paid: newPrice, startedAt: block.timestamp});
 
         emit SepehrEvents.TierUpgraded(msg.sender, oldTier, newTier);
         emit SepehrEvents.Subscribed(msg.sender, sub.expiresAt, newTier, newAnnual, block.chainid);
     }
 
     /// @inheritdoc ISepehrCore
-    /// @dev H25: on early cancellation we refund the pro-rata unused portion of the remaining
-    /// subscription in USDC. Previously an `unsubscribe` simply deleted the record and the user
+    /// @dev H25: on early cancellation we refund the pro-rata unused portion of what the user
+    /// paid for the current window (M-1), in USDC. Previously an `unsubscribe` simply deleted the record and the user
     /// forfeited all prepaid time — equivalent to a silent penalty for cancelling. Refunds are
     /// bounded by the outstanding `ownerFeeBalances[USDC]` so the protocol can never over-pay if
     /// the treasury has already been drained via `withdrawOwnerFees`. Titan grants (tier 4) are
@@ -429,44 +463,17 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         Subscription storage sub = _subscriptions[msg.sender];
         if (sub.tier == 0) revert SepehrErrors.SubscriptionNotFound();
 
-        uint256 refund;
-        if (sub.tier != 4 && sub.expiresAt > block.timestamp) {
-            uint256 remaining = sub.expiresAt - block.timestamp;
-            uint256 duration = sub.annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
-            uint256 price =
-                sub.annual ? TIER_PRICES_ANNUAL_USD_6[sub.tier - 1] : TIER_PRICES_MONTHLY_USD_6[sub.tier - 1];
-            refund = (price * remaining) / duration;
+        uint256 refund = _unusedSubscriptionValue(msg.sender);
+        {
             uint256 avail = ownerFeeBalances[address(usdc)];
             if (refund > avail) refund = avail;
             if (refund > 0) ownerFeeBalances[address(usdc)] -= refund;
         }
 
         delete _subscriptions[msg.sender];
+        delete subscriptionPayments[msg.sender];
 
-        // A18: wipe the user's `_protections` entries so a later re-subscribe does not silently
-        // reactivate stale params. Gas is O(N) in the user's registered protocols, bounded by
-        // the number of registered adapters (~15). The array is kept ordered by insertion so the
-        // event ordering matches enable-time.
-        bytes32[] storage keys = _userProtocols[msg.sender];
-        uint256 n = keys.length;
-        // G4: aggregate the per-protocol snapshots in a single pass so the running TVL total
-        // is decremented exactly once at the end. Per-iteration `protectedCollateralUsd -=`
-        // would still be correct but wastes a SSTORE per protocol; users with N protected
-        // protocols pay one SSTORE here regardless of N.
-        uint256 capRefund;
-        for (uint256 i = 0; i < n; i++) {
-            bytes32 key = keys[i];
-            capRefund += protectionCollateralSnapshot[msg.sender][key];
-            delete protectionCollateralSnapshot[msg.sender][key];
-            delete _protections[msg.sender][key];
-        }
-        if (capRefund != 0) {
-            protectedCollateralUsd -= capRefund;
-        }
-        if (n > 0) {
-            delete _userProtocols[msg.sender];
-            emit SepehrEvents.UserProtectionsCleared(msg.sender, n);
-        }
+        _clearProtections(msg.sender);
 
         if (refund > 0) {
             usdc.safeTransfer(msg.sender, refund);
@@ -510,6 +517,9 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         if (minCollateralUsd != 0 && collateralUsd < minCollateralUsd) {
             revert SepehrErrors.BelowMinimumCollateral(collateralUsd, minCollateralUsd);
         }
+        // L-8 / M-2: the tier cap was only checked at trigger time, so a position above it was
+        // accepted, counted against the TVL cap, and then never rescued.
+        _requireWithinTierCap(msg.sender, collateralUsd);
         uint256 newProtectedTotal = protectedCollateralUsd + collateralUsd;
         if (newProtectedTotal > tvlCapUsd) {
             revert SepehrErrors.TvlCapExceeded(newProtectedTotal, tvlCapUsd);
@@ -567,6 +577,39 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.ProtectionUpdated(msg.sender, protocolKey, thresholdHF, maxSlippageBps, repayPercentBps);
     }
 
+    /// @notice M-2: release the protections of a subscription that has expired or was
+    /// cancelled, returning their snapshots to the protocol-wide TVL budget.
+    /// @dev Callable by anyone: an expired position can no longer be triggered, and without
+    /// this it kept its share of the cap until its owner acted.
+    /// @param user Owner of the expired subscription.
+    function releaseExpiredProtections(
+        address user
+    ) external onlyExpectedChain {
+        if (_subscriptions[user].expiresAt > block.timestamp) revert SepehrErrors.SubscriptionAlreadyActive();
+        _clearProtections(user);
+    }
+
+    /// @notice M-2: re-read a protected position's collateral value and move the TVL running
+    /// total by the difference.
+    /// @dev Callable by anyone. The snapshot taken at `enableProtection` never moved, so
+    /// collateral borrowed for the enable call and withdrawn right after kept the cap filled.
+    /// @param user Owner of the position.
+    /// @param protocolKey Protocol of the position.
+    function refreshCollateralSnapshot(
+        address user,
+        bytes32 protocolKey
+    ) external onlyExpectedChain {
+        if (!_protections[user][protocolKey].enabled) revert SepehrErrors.ProtectionNotEnabled(user, protocolKey);
+        IProtocolAdapter adapter = adapters[protocolKey].adapter;
+        if (address(adapter) == address(0)) revert SepehrErrors.AdapterNotRegistered(protocolKey);
+
+        uint256 oldValue = protectionCollateralSnapshot[user][protocolKey];
+        uint256 newValue = adapter.getCollateralValueUsd(user);
+        protectedCollateralUsd = protectedCollateralUsd - oldValue + newValue;
+        protectionCollateralSnapshot[user][protocolKey] = newValue;
+        emit SepehrEvents.CollateralSnapshotRefreshed(user, protocolKey, oldValue, newValue);
+    }
+
     // ─── Keeper: Trigger ─────────────────────────────────────────
 
     /// @inheritdoc ISepehrCore
@@ -593,15 +636,6 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             revert SepehrErrors.DelegationRevoked(user, protocolKey);
         }
 
-        // A16: per-(user, protocol) cooldown. A user with multi-protocol exposure (Aave +
-        // Compound + Morpho) is protected independently on each: a trigger on one protocol
-        // no longer locks the others for an hour, which would otherwise let an adversary
-        // freeze protection on the "critical" position by manipulating a low-stakes one first.
-        uint256 timeSinceLast = block.timestamp - lastTriggerTime[user][protocolKey];
-        if (timeSinceLast < COOLDOWN_SECONDS) {
-            revert SepehrErrors.CooldownActive(COOLDOWN_SECONDS - timeSinceLast);
-        }
-
         uint256 hfBefore = entry.adapter.getHealthFactor(user);
         if (hfBefore >= prot.thresholdHF) {
             revert SepehrErrors.HealthFactorAboveThreshold(hfBefore, prot.thresholdHF);
@@ -613,18 +647,31 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             revert SepehrErrors.ImplausibleHealthFactor(hfBefore, MIN_PLAUSIBLE_HF_WAD);
         }
 
+        // A16: per-(user, protocol) cooldown. A user with multi-protocol exposure (Aave +
+        // Compound + Morpho) is protected independently on each: a trigger on one protocol
+        // no longer locks the others for an hour, which would otherwise let an adversary
+        // freeze protection on the "critical" position by manipulating a low-stakes one first.
+        // H-2: the cooldown no longer blocks a market that keeps falling. Once the health
+        // factor drops `RETRIGGER_HF_DROP_BPS` below what the last trigger left, the position
+        // can be rescued again.
+        {
+            uint256 timeSinceLast = block.timestamp - lastTriggerTime[user][protocolKey];
+            if (timeSinceLast < COOLDOWN_SECONDS) {
+                uint256 retriggerBelow = Percentages.applyBps(
+                    lastTriggerHealthFactor[user][protocolKey], Percentages.BPS_DENOMINATOR - RETRIGGER_HF_DROP_BPS
+                );
+                if (hfBefore >= retriggerBelow) {
+                    revert SepehrErrors.CooldownActive(COOLDOWN_SECONDS - timeSinceLast);
+                }
+            }
+        }
+
         // H01: enforce the tier's collateral-value cap at the moment of execution. Checking
         // only at subscription would let a user grow their position after subscribing and
         // receive protection beyond what their tier economically justifies. Titan (tier 4) has
         // an unbounded cap (type(uint256).max) and is skipped.
-        {
-            uint256 tierCap = TIER_MAX_COLLATERAL_USD_8[_subscriptions[user].tier - 1];
-            if (tierCap != type(uint256).max) {
-                uint256 collateralUsd = entry.adapter.getCollateralValueUsd(user);
-                if (collateralUsd > tierCap) {
-                    revert SepehrErrors.TierCollateralCapExceeded(collateralUsd, tierCap);
-                }
-            }
+        if (TIER_MAX_COLLATERAL_USD_8[_subscriptions[user].tier - 1] != type(uint256).max) {
+            _requireWithinTierCap(user, entry.adapter.getCollateralValueUsd(user));
         }
 
         if (repayAmount == 0) revert SepehrErrors.ZeroAmount();
@@ -632,17 +679,15 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         // H02: enforce the user's `repayPercentBps` limit. The user constrains how much of their
         // outstanding debt Sepehr may close in a single trigger (e.g. "never touch more than
         // 25% at once"), which protects them from a keeper that over-repays and drains their
-        // position. `getDebt` may return 0 for adapters that cannot read debt in a single call
-        // (per-vault models where debt is partitioned across positions, etc.); in that case we short-circuit the percent check —
-        // the flash loan + adapter.repay() would still fail on any amount exceeding true debt,
-        // but the percent-of-debt guarantee is downgraded to "whatever the protocol permits".
+        // position. M-6: every adapter's `getDebt` returns 0 only when the user owes nothing in
+        // `debtAsset`, so 0 now reverts; it used to skip the limit, which let a keeper "repay"
+        // Compound in a collateral asset with no bound.
         {
             uint256 userDebt = entry.adapter.getDebt(user, debtAsset);
-            if (userDebt != 0) {
-                uint256 allowed = (userDebt * prot.repayPercentBps) / 10_000;
-                if (repayAmount > allowed) {
-                    revert SepehrErrors.RepayExceedsUserLimit(repayAmount, allowed);
-                }
+            if (userDebt == 0) revert SepehrErrors.NoDebtToRepay(user, debtAsset);
+            uint256 allowed = (userDebt * prot.repayPercentBps) / 10_000;
+            if (repayAmount > allowed) {
+                revert SepehrErrors.RepayExceedsUserLimit(repayAmount, allowed);
             }
         }
 
@@ -670,17 +715,20 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         _activeSessionHash = keccak256(abi.encode(keccak256(callbackData), debtAsset, repayAmount));
         _borrowFlashLoan(flashProviders, debtAsset, repayAmount, callbackData);
         _activeSessionHash = bytes32(0);
+        uint256 collateralWithdrawn = _collateralWithdrawn;
+        _collateralWithdrawn = 0;
 
-        uint256 hfAfter = entry.adapter.getHealthFactor(user);
-        if (hfAfter < prot.thresholdHF) {
-            revert SepehrErrors.PostExecutionHFBelowThreshold(hfAfter, prot.thresholdHF);
-        }
+        // H-2: a trigger only has to improve the health factor. Requiring it to clear the
+        // threshold blocked every rescue once a fast drop pushed the position further than the
+        // user's repay share could recover, which is when protection matters most.
         // H09: require strict HF improvement. A trigger that leaves HF unchanged (or regressed
         // due to a stale adapter price cache) is ineffective, and charging fees for a no-op would
         // constitute unjust enrichment of keeper + owner at the user's expense.
+        uint256 hfAfter = entry.adapter.getHealthFactor(user);
         if (hfAfter <= hfBefore) {
             revert SepehrErrors.HealthFactorNotImproved(hfBefore, hfAfter);
         }
+        lastTriggerHealthFactor[user][protocolKey] = hfAfter;
 
         uint256 totalFee = Percentages.applyBps(repayAmount, userFeeBps);
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(totalFee);
@@ -691,8 +739,10 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         ownerFeeBalances[debtAsset] += ownerShare;
         keeperFeeBalances[msg.sender][debtAsset] += keeperShare;
 
-        emit SepehrEvents.Triggered(user, protocolKey, msg.sender, repayAmount, 0, hfBefore, hfAfter, totalFee);
-        emit SepehrEvents.FeeCollected(msg.sender, totalFee, ownerShare, keeperShare);
+        emit SepehrEvents.Triggered(
+            user, protocolKey, msg.sender, repayAmount, collateralWithdrawn, hfBefore, hfAfter, totalFee
+        );
+        emit SepehrEvents.FeeCollected(msg.sender, debtAsset, totalFee, ownerShare, keeperShare);
     }
 
     // ─── Flash Loan Callback ─────────────────────────────────────
@@ -734,19 +784,24 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
         IProtocolAdapter adapter = adapters[protocolKey].adapter;
 
+        // H-3 / L-2: balances the core held before this trigger (the provider already sent
+        // `amount`). The trigger keeps the flash-loan repayment and the fee `execute` credits;
+        // everything else it ends up holding goes back to the user.
+        uint256 debtHeld = IERC20(debtAsset).balanceOf(address(this)) - amount;
+        uint256 collateralHeld = collateralAsset == debtAsset ? 0 : IERC20(collateralAsset).balanceOf(address(this));
+
         IERC20(debtAsset).safeTransfer(address(adapter), repayAmount);
         adapter.repay(user, debtAsset, repayAmount);
 
         // C1: `requiredDebtOut` is the amount of debt-asset the contract must hold after the
         // optional swap — enough to repay the flash loan (`repayAmount + fee`) and to fund the
-        // `totalFee` that execute() will credit to owner + keeper balances. applyBpsRoundUp
-        // matches the round-down `applyBps` used in execute() so a 1-unit surplus may remain.
-        uint256 requiredDebtOut = repayAmount + fee + Percentages.applyBpsRoundUp(repayAmount, triggerFeeBps);
+        // `totalFee` that execute() credits to owner + keeper balances, with the same rounding.
+        uint256 requiredDebtOut = repayAmount + fee + Percentages.applyBps(repayAmount, triggerFeeBps);
 
         uint256 collateralNeeded;
         if (collateralAsset == debtAsset) {
             // Homogeneous case: collateral == debt, no swap needed. Withdraw exactly the
-            // required output; the surplus over (amount+fee) funds trigger-fee accrual.
+            // required output; the part over (amount+fee) funds trigger-fee accrual.
             collateralNeeded = requiredDebtOut;
         } else {
             // C1: cross-asset — reverse-project `requiredDebtOut` through the Chainlink oracle
@@ -758,6 +813,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         }
 
         adapter.withdrawCollateral(user, collateralAsset, collateralNeeded, address(this));
+        _collateralWithdrawn = collateralNeeded;
 
         if (collateralAsset != debtAsset) {
             // D1/D4: if governance has registered a canonical route for this
@@ -781,25 +837,29 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             uint256 oracleFloor = _oracleMinOut(collateralAsset, debtAsset, collateralNeeded, maxSlippageBps);
             if (oracleFloor > minOut) minOut = oracleFloor;
 
+            uint256 debtBeforeSwap = IERC20(debtAsset).balanceOf(address(this));
             IERC20(collateralAsset).safeIncreaseAllowance(dexRouter, collateralNeeded);
-            uint256 received =
-                IDexRouter(dexRouter).swap(collateralAsset, debtAsset, collateralNeeded, minOut, dexRouteData);
+            IDexRouter(dexRouter).swap(collateralAsset, debtAsset, collateralNeeded, minOut, dexRouteData);
             // H07: zero the allowance after the swap so a residual approval cannot be drained
             // later if the router holds onto it. forceApprove handles tokens that require the
             // allowance to be reset to zero before being changed.
             IERC20(collateralAsset).forceApprove(dexRouter, 0);
 
+            // L-2: measure what the core actually received rather than trusting the router.
+            uint256 received = IERC20(debtAsset).balanceOf(address(this)) - debtBeforeSwap;
             if (received < minOut) {
                 revert SepehrErrors.SlippageExceeded(received, minOut);
             }
-            // H10: any excess above `requiredDebtOut` is leftover slippage headroom the swap
-            // did not consume. Sweep it to owner fees so the protocol captures positive MEV
-            // rather than leaving it uncredited and unrecoverable.
-            uint256 surplus = received - requiredDebtOut;
-            if (surplus > 0) {
-                ownerFeeBalances[debtAsset] += surplus;
-            }
+            // L-2: collateral the router handed back unspent belongs to the user.
+            _returnSurplus(user, collateralAsset, IERC20(collateralAsset).balanceOf(address(this)) - collateralHeld);
         }
+
+        // H-3: unused slippage headroom (and any repay surplus an adapter swept back) used to be
+        // credited to the owner. It goes back to the user; the core keeps exactly what it owes.
+        uint256 owed = amount + fee + Percentages.applyBps(repayAmount, triggerFeeBps);
+        uint256 available = IERC20(debtAsset).balanceOf(address(this)) - debtHeld;
+        if (available < owed) revert SepehrErrors.InsufficientRescueProceeds(available, owed);
+        _returnSurplus(user, debtAsset, available - owed);
 
         IERC20(asset).safeTransfer(msg.sender, amount + fee);
     }
@@ -987,8 +1047,8 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// unable to respond to a USDC depeg or genuine cost change. Each call is bounded by
     /// `MAX_TIER_PRICE_DEVIATION_BPS` (±50%) so a pathological move requires multiple 48h-delayed
     /// proposals. Tier 4 (Titan) is owner-granted, not priced, so only tiers 1–3 are mutable.
-    /// Pro-rata math in `unsubscribe` and `upgradeTier` always reads the live price, so in-flight
-    /// subscriptions refund/credit against whatever price was current at cancellation.
+    /// M-1: `unsubscribe` and `upgradeTier` pro-rate what the user paid for the current window,
+    /// so a price change never alters the refund or credit of a subscription already paid.
     /// @param tier Tier index in [1, 3]; reverts on 0 or ≥4.
     /// @param annual `true` to update the annual price, `false` for monthly.
     /// @param newPrice Replacement price in USDC-6 units; must be within
@@ -1080,6 +1140,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         }
 
         _subscriptions[user] = Subscription({tier: 4, annual: false, expiresAt: block.timestamp + durationSeconds});
+        delete subscriptionPayments[user];
 
         emit SepehrEvents.TitanSubscriptionGranted(user, block.timestamp + durationSeconds);
     }
@@ -1247,6 +1308,17 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.StrictOraclePricingUpdated(enabled);
     }
 
+    /// @notice L-5: set the L2 sequencer uptime feed checked before every oracle read.
+    /// @dev Timelock-gated. address(0) disables the check.
+    /// @param feed Chainlink sequencer uptime feed (Arbitrum One:
+    /// 0xFdB631F5EE196F0ed6FAa767959853A9F217697D).
+    function setSequencerUptimeFeed(
+        address feed
+    ) external onlyExpectedChain onlyTimelock {
+        sequencerUptimeFeed = IChainlinkAggregator(feed);
+        emit SepehrEvents.SequencerUptimeFeedSet(feed);
+    }
+
     /// @notice D2: compute the oracle-derived minimum output for a `collateralAsset → debtAsset`
     /// swap of `amountIn` collateral units, accounting for the user-supplied `maxSlippageBps`.
     /// @dev Returns 0 when either side lacks a registered oracle and `strictOraclePricing`
@@ -1336,12 +1408,36 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         address asset,
         AssetOracle memory oracle
     ) private view returns (uint256) {
+        _requireSequencerUp();
         (, int256 answer,, uint256 updatedAt,) = oracle.aggregator.latestRoundData();
         if (answer <= 0) revert SepehrErrors.InvalidOraclePrice(asset, answer);
         if (block.timestamp > updatedAt && block.timestamp - updatedAt > oracle.maxStaleness) {
             revert SepehrErrors.StaleOraclePrice(asset, updatedAt, block.timestamp);
         }
         return uint256(answer);
+    }
+
+    /// @notice H-3 / L-2: send tokens a trigger did not consume back to the protected user.
+    function _returnSurplus(
+        address user,
+        address asset,
+        uint256 amount
+    ) private {
+        if (amount == 0) return;
+        IERC20(asset).safeTransfer(user, amount);
+        emit SepehrEvents.SurplusReturned(user, asset, amount);
+    }
+
+    /// @notice L-5: Chainlink's L2 sequencer check. `answer` 0 means up, 1 down; `startedAt` is
+    /// when that status began, and 0 marks an invalid round.
+    function _requireSequencerUp() private view {
+        IChainlinkAggregator feed = sequencerUptimeFeed;
+        if (address(feed) == address(0)) return;
+        (, int256 answer, uint256 startedAt,,) = feed.latestRoundData();
+        if (answer != 0 || startedAt == 0) revert SepehrErrors.SequencerDown();
+        if (block.timestamp - startedAt <= SEQUENCER_GRACE_PERIOD) {
+            revert SepehrErrors.SequencerGracePeriodNotOver(startedAt);
+        }
     }
 
     /// @notice A18: swap-and-pop `protocolKey` out of `_userProtocols[user]`. Preserves O(1) per
@@ -1440,6 +1536,50 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         if (sub.expiresAt <= block.timestamp) revert SepehrErrors.SubscriptionExpired();
     }
 
+    /// @notice A18: wipe every protection of `user` so a later re-subscribe does not silently
+    /// reactivate stale params, and return their snapshots to the TVL running total (G4) in one
+    /// write. Gas is O(N) in the user's protected protocols, bounded by the registered adapters.
+    function _clearProtections(
+        address user
+    ) private {
+        bytes32[] storage keys = _userProtocols[user];
+        uint256 n = keys.length;
+        uint256 capRefund;
+        for (uint256 i = 0; i < n; i++) {
+            bytes32 key = keys[i];
+            capRefund += protectionCollateralSnapshot[user][key];
+            delete protectionCollateralSnapshot[user][key];
+            delete _protections[user][key];
+        }
+        if (capRefund != 0) {
+            protectedCollateralUsd -= capRefund;
+        }
+        if (n > 0) {
+            delete _userProtocols[user];
+            emit SepehrEvents.UserProtectionsCleared(user, n);
+        }
+    }
+
+    /// @notice H01 / L-8: `collateralUsd` must fit the user's tier cap (Titan is unlimited).
+    function _requireWithinTierCap(
+        address user,
+        uint256 collateralUsd
+    ) internal view {
+        uint256 tierCap = TIER_MAX_COLLATERAL_USD_8[_subscriptions[user].tier - 1];
+        if (collateralUsd > tierCap) revert SepehrErrors.TierCollateralCapExceeded(collateralUsd, tierCap);
+    }
+
+    /// @notice M-1: the unused part of what `user` paid for the current window, pro-rated by
+    /// time. Zero for Titan grants (never paid) and for an expired subscription.
+    function _unusedSubscriptionValue(
+        address user
+    ) internal view returns (uint256) {
+        Subscription storage sub = _subscriptions[user];
+        if (sub.tier == 4 || sub.expiresAt <= block.timestamp) return 0;
+        SubscriptionPayment storage payment = subscriptionPayments[user];
+        return (payment.paid * (sub.expiresAt - block.timestamp)) / (sub.expiresAt - payment.startedAt);
+    }
+
     function _validateProtectionParams(
         uint256 thresholdHF,
         uint256 maxSlippageBps,
@@ -1451,17 +1591,26 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         if (repayPercentBps > MAX_REPAY_BPS) {
             revert SepehrErrors.RepayPercentTooHigh(repayPercentBps, MAX_REPAY_BPS);
         }
+        if (repayPercentBps < MIN_REPAY_BPS) {
+            revert SepehrErrors.RepayPercentTooLow(repayPercentBps, MIN_REPAY_BPS);
+        }
         if (maxSlippageBps > MAX_SLIPPAGE_BPS) {
             revert SepehrErrors.InvalidSlippage(maxSlippageBps);
         }
     }
 
+    /// @dev L-1: when every attempted provider reverts, the last provider's revert data is
+    /// re-raised as is, so a slippage, oracle or adapter failure inside the callback reaches the
+    /// keeper instead of a generic `NoFlashLoanAvailable` (the `FlashAttemptFailed` events are
+    /// rolled back with the transaction). `NoFlashLoanAvailable` is left for the case where no
+    /// whitelisted provider could even be attempted, or the last one reverted without data.
     function _borrowFlashLoan(
         address[] calldata providers,
         address asset,
         uint256 amount,
         bytes memory data
     ) internal {
+        bytes memory lastFailure;
         for (uint256 i = 0; i < providers.length; i++) {
             if (!allowedFlashProviders[providers[i]]) continue;
 
@@ -1482,7 +1631,13 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
                 // drift rather than upstream-liquidity shortage).
                 emit SepehrEvents.FlashAttemptFailed(providers[i], reason);
                 _activeFlashProvider = address(0);
+                lastFailure = reason;
                 continue;
+            }
+        }
+        if (lastFailure.length != 0) {
+            assembly ("memory-safe") {
+                revert(add(lastFailure, 32), mload(lastFailure))
             }
         }
         revert SepehrErrors.NoFlashLoanAvailable();

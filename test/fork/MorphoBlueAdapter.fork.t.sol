@@ -32,6 +32,8 @@ contract MorphoBlueAdapterForkTest is ForkTestBase {
     address constant MORPHO = 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb;
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+    /// @dev Chainlink USDC/USD (8 decimals), the market's loan-token feed (M-4).
+    address constant USDC_USD_FEED = 0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6;
 
     // Known WETH/USDC market on Morpho Blue (86% LLTV, AdaptiveCurveIrm)
     // This market ID corresponds to WETH collateral / USDC loan with Chainlink oracle
@@ -46,17 +48,18 @@ contract MorphoBlueAdapterForkTest is ForkTestBase {
         forked = _tryCreateFork("RPC_ETHEREUM_PRIMARY_HTTP");
         if (!forked) return;
 
-        adapter = new MorphoBlueAdapter(MORPHO, MARKET_ID, address(this));
         user = makeAddr("morphoUser");
 
         // Fetch market params from the real Morpho contract
         params = IMorpho(MORPHO).idToMarketParams(MARKET_ID);
 
-        // Skip if this market doesn't exist on-chain
+        // Skip if this market doesn't exist on-chain (the adapter reads its loan token)
         if (params.loanToken == address(0)) {
             forked = false;
             return;
         }
+
+        adapter = new MorphoBlueAdapter(MORPHO, MARKET_ID, USDC_USD_FEED, address(this));
 
         _createMorphoPosition();
     }

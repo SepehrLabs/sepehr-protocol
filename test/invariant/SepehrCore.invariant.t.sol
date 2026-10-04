@@ -141,4 +141,14 @@ contract SepehrCoreInvariantTest is Test {
         uint256 ledger = core.ownerFeeBalances(address(usdc)) + core.keeperFeeBalances(keeper, address(usdc));
         assertGe(usdc.balanceOf(address(core)), ledger, "USDC treasury under-funded");
     }
+
+    // ── M-2: the TVL running total is the sum of the position snapshots ──
+
+    function invariant_protectedCollateralIsTheSumOfSnapshots() public view {
+        uint256 sum;
+        for (uint256 i = 0; i < handler.actorCount(); i++) {
+            sum += core.protectionCollateralSnapshot(handler.actors(i), PROTOCOL_KEY);
+        }
+        assertEq(core.protectedCollateralUsd(), sum);
+    }
 }

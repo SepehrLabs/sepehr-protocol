@@ -21,6 +21,10 @@ library SepehrEvents {
     /// @notice A18: emitted when `unsubscribe` iterates and wipes the user's `_protections`
     /// entries. `count` is the number of protocol keys cleared in this call.
     event UserProtectionsCleared(address indexed user, uint256 count);
+    /// @notice M-2: a position's TVL snapshot re-read at its current collateral value.
+    event CollateralSnapshotRefreshed(
+        address indexed user, bytes32 indexed protocolKey, uint256 oldValueUsd, uint256 newValueUsd
+    );
     event ProtectionUpdated(
         address indexed user,
         bytes32 indexed protocolKey,
@@ -42,7 +46,12 @@ library SepehrEvents {
     );
 
     // ─── Fees ────────────────────────────────────────────────────
-    event FeeCollected(address indexed keeper, uint256 totalFee, uint256 ownerShare, uint256 keeperShare);
+    /// @dev I-1: `asset` is the trigger's debt asset, the token the fee accrues in.
+    event FeeCollected(
+        address indexed keeper, address indexed asset, uint256 totalFee, uint256 ownerShare, uint256 keeperShare
+    );
+    /// @notice H-3 / L-2: tokens a trigger did not consume, sent back to the protected user.
+    event SurplusReturned(address indexed user, address indexed asset, uint256 amount);
     event OwnerFeesWithdrawn(address indexed asset, address indexed to, uint256 amount);
     event KeeperFeesWithdrawn(address indexed keeper, address indexed asset, uint256 amount);
     event TierFeeBpsUpdated(uint8 indexed tier, uint256 oldBps, uint256 newBps);
@@ -70,6 +79,8 @@ library SepehrEvents {
     /// inside `_borrowFlashLoan`. Surfaces the provider-side revert data that `try/catch` would
     /// otherwise swallow, making misconfigurations diagnosable without re-triggering the failure.
     event FlashAttemptFailed(address indexed provider, bytes reason);
+    /// @notice L-5: the L2 sequencer uptime feed (address(0) disables the check).
+    event SequencerUptimeFeedSet(address indexed feed);
     event DexRouterAdded(address indexed router);
     event DexRouterRemoved(address indexed router);
     event PauseGuardianUpdated(address indexed oldGuardian, address indexed newGuardian);

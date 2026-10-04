@@ -1078,6 +1078,22 @@ contract SepehrCoreAdminTest is Test {
         core.setStrictOraclePricing(true);
     }
 
+    // ─── L-5: sequencer uptime feed ───────────────────────────────────
+
+    function test_setSequencerUptimeFeed_setsAndEmits() public {
+        address feed = makeAddr("sequencerFeed");
+        vm.expectEmit(true, false, false, false, address(core));
+        emit SepehrEvents.SequencerUptimeFeedSet(feed);
+        vm.prank(timelock);
+        core.setSequencerUptimeFeed(feed);
+        assertEq(address(core.sequencerUptimeFeed()), feed);
+    }
+
+    function test_setSequencerUptimeFeed_revertsFromNonTimelock() public {
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
+        core.setSequencerUptimeFeed(makeAddr("sequencerFeed"));
+    }
+
     // ─── C2: renounceOwnership must be disabled ───────────────────────
 
     /// @dev C2: allowing `renounceOwnership` would permanently disable fee withdrawal,

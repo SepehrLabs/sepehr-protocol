@@ -86,7 +86,9 @@ contract E2ELocalDeploy is Script {
             address morphoSingleton = vm.envOr("MORPHO_SINGLETON_ADDRESS", address(0));
             bytes32 morphoMarketId = vm.envOr("MORPHO_MARKET_ID", bytes32(0));
             if (morphoSingleton != address(0) && morphoMarketId != bytes32(0)) {
-                morphoAdapter = address(new MorphoBlueAdapter(morphoSingleton, morphoMarketId, address(core)));
+                // The harness's Morpho market lends USDC, priced by the mock USDC feed (M-4).
+                morphoAdapter =
+                    address(new MorphoBlueAdapter(morphoSingleton, morphoMarketId, address(usdcOracle), address(core)));
                 console.log("ADAPTER_MORPHO_BLUE", morphoAdapter);
             }
         }

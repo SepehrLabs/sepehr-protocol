@@ -84,6 +84,9 @@ contract CompoundV3Adapter is IProtocolAdapter {
         uint256 amount
     ) external onlyCore {
         if (amount == 0) revert SepehrErrors.ZeroAmount();
+        // M-6: supplying any asset but the base adds collateral instead of repaying the debt.
+        address base = COMET.baseToken();
+        if (debtAsset != base) revert SepehrErrors.DebtAssetMismatch(base, debtAsset);
         IERC20(debtAsset).forceApprove(address(COMET), amount);
         COMET.supplyTo(user, debtAsset, amount);
         uint256 surplus = IERC20(debtAsset).balanceOf(address(this));

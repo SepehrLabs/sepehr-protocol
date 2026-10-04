@@ -28,6 +28,7 @@ contract CompoundV3AdapterTest is Test {
         collateralB = new MockERC20("WBTC", "WBTC");
 
         comet.setBaseTokenPriceFeed(basePriceFeed);
+        comet.setBaseToken(address(debtToken));
 
         adapter = new CompoundV3Adapter(address(comet), core);
     }
@@ -148,6 +149,17 @@ contract CompoundV3AdapterTest is Test {
         vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         adapter.repay(user, address(debtToken), 0);
+    }
+
+    /// @dev M-6: supplying a collateral asset would add collateral instead of repaying the base.
+    function test_repay_revertsForANonBaseAsset() public {
+        collateralA.mint(address(adapter), 1e18);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SepehrErrors.DebtAssetMismatch.selector, address(debtToken), address(collateralA))
+        );
+        vm.prank(core);
+        adapter.repay(user, address(collateralA), 1e18);
     }
 
     function test_repay_callsSupplyToWithCorrectArgs() public {

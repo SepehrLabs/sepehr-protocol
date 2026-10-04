@@ -24,6 +24,7 @@ contract AaveV3AdapterTest is Test {
         collateralToken = new MockERC20("Collateral", "COL");
 
         pool = new MockAavePoolAdapter(address(collateralToken));
+        pool.setAToken(address(collateralToken), address(aToken));
         adapter = new AaveV3Adapter(address(pool), address(aToken), core);
     }
 
@@ -100,6 +101,7 @@ contract AaveV3AdapterTest is Test {
     }
 
     function test_checkDelegation_returnsTrueAtThreshold() public {
+        aToken.mint(user, 1e18);
         // Audit B20: boundary — allowance exactly at the threshold passes.
         vm.prank(user);
         aToken.approve(address(adapter), uint256(type(uint128).max));
@@ -107,7 +109,17 @@ contract AaveV3AdapterTest is Test {
         assertTrue(adapter.checkDelegation(user));
     }
 
+    /// @dev M-3: an approval without any of the aToken is not a usable delegation.
+    function test_checkDelegation_returnsFalseWhenUserHoldsNoAToken() public {
+        address empty = makeAddr("empty");
+        vm.prank(empty);
+        aToken.approve(address(adapter), type(uint256).max);
+
+        assertFalse(adapter.checkDelegation(empty));
+    }
+
     function test_checkDelegation_returnsTrueWithMaxAllowance() public {
+        aToken.mint(user, 1e18);
         vm.prank(user);
         aToken.approve(address(adapter), type(uint256).max);
 
@@ -205,6 +217,19 @@ contract AaveV3AdapterTest is Test {
         vm.prank(core);
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         adapter.withdrawCollateral(user, address(collateralToken), 1e18, address(0));
+    }
+
+    /// @dev M-3: a collateral whose reserve uses another aToken is refused, not silently pulled.
+    function test_withdrawCollateral_revertsForAnotherReserve() public {
+        MockERC20 other = new MockERC20("Other", "OTH");
+        MockERC20 otherAToken = new MockERC20("aOther", "aOTH");
+        pool.setAToken(address(other), address(otherAToken));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SepehrErrors.CollateralAssetMismatch.selector, address(aToken), address(otherAToken))
+        );
+        vm.prank(core);
+        adapter.withdrawCollateral(user, address(other), 1e18, recipient);
     }
 
     function test_withdrawCollateral_transfersATokensAndCallsWithdraw() public {
