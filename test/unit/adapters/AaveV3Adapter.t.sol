@@ -25,29 +25,26 @@ contract AaveV3AdapterTest is Test {
 
         pool = new MockAavePoolAdapter(address(collateralToken));
         pool.setAToken(address(collateralToken), address(aToken));
-        adapter = new AaveV3Adapter(address(pool), address(aToken), core);
+        pool.addReserve(address(collateralToken));
+        // Reserve 0 used as collateral: bit 2 * 0 + 1.
+        pool.setUserConfiguration(user, 1 << 1);
+        adapter = new AaveV3Adapter(address(pool), core);
     }
 
     // ─── Constructor ───────────────────────────────────────────────────
 
     function test_constructor_revertsOnZeroPool() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new AaveV3Adapter(address(0), address(aToken), core);
-    }
-
-    function test_constructor_revertsOnZeroAToken() public {
-        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new AaveV3Adapter(address(pool), address(0), core);
+        new AaveV3Adapter(address(0), core);
     }
 
     function test_constructor_revertsOnZeroCore() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new AaveV3Adapter(address(pool), address(aToken), address(0));
+        new AaveV3Adapter(address(pool), address(0));
     }
 
     function test_constructor_storesImmutables() public view {
         assertEq(address(adapter.POOL()), address(pool));
-        assertEq(adapter.ATOKEN(), address(aToken));
         assertEq(adapter.core(), core);
     }
 
@@ -112,10 +109,80 @@ contract AaveV3AdapterTest is Test {
     /// @dev M-3: an approval without any of the aToken is not a usable delegation.
     function test_checkDelegation_returnsFalseWhenUserHoldsNoAToken() public {
         address empty = makeAddr("empty");
+        pool.setUserConfiguration(empty, 1 << 1);
         vm.prank(empty);
         aToken.approve(address(adapter), type(uint256).max);
 
         assertFalse(adapter.checkDelegation(empty));
+    }
+
+    /// @dev An approved aToken that the user does not use as collateral does not count.
+    function test_checkDelegation_ignoresAssetsNotUsedAsCollateral() public {
+        aToken.mint(user, 1e18);
+        vm.prank(user);
+        aToken.approve(address(adapter), type(uint256).max);
+        pool.setUserConfiguration(user, 1 << 0); // borrowing reserve 0, not collateral
+
+        assertFalse(adapter.checkDelegation(user));
+    }
+
+    /// @dev M-3: with several collaterals, one approved collateral is enough for the core;
+    ///      the keeper withdraws among the approved ones.
+    function test_checkDelegation_trueWhenAnyCollateralIsApproved() public {
+        (MockERC20 second, MockERC20 secondAToken) = _secondCollateral();
+        aToken.mint(user, 1e18); // held, not approved
+        secondAToken.mint(user, 1e18);
+        vm.prank(user);
+        secondAToken.approve(address(adapter), type(uint256).max);
+
+        assertTrue(adapter.checkDelegation(user));
+        assertFalse(adapter.isDelegated(user, address(collateralToken)));
+        assertTrue(adapter.isDelegated(user, address(second)));
+    }
+
+    function test_isDelegated_falseForAnAssetAaveDoesNotList() public {
+        assertFalse(adapter.isDelegated(user, makeAddr("unlisted")));
+    }
+
+    function test_collateralsOf_listsEachCollateralWithBalanceAndAllowance() public {
+        (MockERC20 second, MockERC20 secondAToken) = _secondCollateral();
+        aToken.mint(user, 3e18);
+        secondAToken.mint(user, 2e18);
+        vm.prank(user);
+        secondAToken.approve(address(adapter), type(uint256).max);
+
+        AaveV3Adapter.Collateral[] memory list = adapter.collateralsOf(user);
+
+        assertEq(list.length, 2);
+        assertEq(list[0].asset, address(collateralToken));
+        assertEq(list[0].aToken, address(aToken));
+        assertEq(list[0].symbol, "COL");
+        assertEq(list[0].balance, 3e18);
+        assertEq(list[0].allowance, 0);
+        assertEq(list[1].asset, address(second));
+        assertEq(list[1].symbol, "SEC");
+        assertEq(list[1].allowance, type(uint256).max);
+    }
+
+    function test_collateralsOf_leavesOutReservesNotUsedAsCollateral() public {
+        _secondCollateral();
+        pool.setUserConfiguration(user, (1 << 1) | (1 << 2)); // reserve 1 borrowed, not collateral
+        AaveV3Adapter.Collateral[] memory list = adapter.collateralsOf(user);
+        assertEq(list.length, 1);
+        assertEq(list[0].asset, address(collateralToken));
+    }
+
+    function test_collateralsOf_isEmptyWithoutCollateral() public {
+        assertEq(adapter.collateralsOf(makeAddr("nobody")).length, 0);
+    }
+
+    /// @dev Lists a second collateral (reserve 1) that `user` also supplies.
+    function _secondCollateral() internal returns (MockERC20 second, MockERC20 secondAToken) {
+        second = new MockERC20("Second", "SEC");
+        secondAToken = new MockERC20("aSecond", "aSEC");
+        pool.setAToken(address(second), address(secondAToken));
+        pool.addReserve(address(second));
+        pool.setUserConfiguration(user, (1 << 1) | (1 << 3));
     }
 
     function test_checkDelegation_returnsTrueWithMaxAllowance() public {
@@ -219,17 +286,31 @@ contract AaveV3AdapterTest is Test {
         adapter.withdrawCollateral(user, address(collateralToken), 1e18, address(0));
     }
 
-    /// @dev M-3: a collateral whose reserve uses another aToken is refused, not silently pulled.
-    function test_withdrawCollateral_revertsForAnotherReserve() public {
-        MockERC20 other = new MockERC20("Other", "OTH");
-        MockERC20 otherAToken = new MockERC20("aOther", "aOTH");
-        pool.setAToken(address(other), address(otherAToken));
-
-        vm.expectRevert(
-            abi.encodeWithSelector(SepehrErrors.CollateralAssetMismatch.selector, address(aToken), address(otherAToken))
-        );
+    /// @dev An asset Aave does not list has no aToken to pull: refused.
+    function test_withdrawCollateral_revertsForAnAssetAaveDoesNotList() public {
+        address unlisted = makeAddr("unlisted");
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.UnsupportedCollateral.selector, unlisted));
         vm.prank(core);
-        adapter.withdrawCollateral(user, address(other), 1e18, recipient);
+        adapter.withdrawCollateral(user, unlisted, 1e18, recipient);
+    }
+
+    /// @dev M-3: a second collateral is withdrawn through its own aToken.
+    function test_withdrawCollateral_pullsTheNamedCollateralsAToken() public {
+        (MockERC20 second, MockERC20 secondAToken) = _secondCollateral();
+        uint256 amount = 5e18;
+        aToken.mint(user, amount);
+        secondAToken.mint(user, amount);
+        second.mint(address(pool), amount);
+        vm.prank(user);
+        secondAToken.approve(address(adapter), type(uint256).max);
+
+        vm.prank(core);
+        adapter.withdrawCollateral(user, address(second), amount, recipient);
+
+        assertEq(secondAToken.balanceOf(user), 0);
+        assertEq(aToken.balanceOf(user), amount);
+        (address asset,,) = pool.withdrawCalls(0);
+        assertEq(asset, address(second));
     }
 
     function test_withdrawCollateral_transfersATokensAndCallsWithdraw() public {
@@ -300,5 +381,19 @@ contract AaveV3AdapterTest is Test {
     ) public {
         pool.setUserAccountData(user, collateralValue, 0, 0, 0, 0, 0);
         assertEq(adapter.getCollateralValueUsd(user), collateralValue);
+    }
+
+    // ─── getDebt ───────────────────────────────────────────────────────
+
+    function test_getDebt_readsTheVariableDebtToken() public {
+        MockERC20 variableDebt = new MockERC20("variableDebt", "vDEBT");
+        pool.setVariableDebtToken(address(debtToken), address(variableDebt));
+        variableDebt.mint(user, 1234e18);
+
+        assertEq(adapter.getDebt(user, address(debtToken)), 1234e18);
+    }
+
+    function test_getDebt_isZeroForAnAssetWithoutAReserve() public view {
+        assertEq(adapter.getDebt(user, address(debtToken)), 0);
     }
 }

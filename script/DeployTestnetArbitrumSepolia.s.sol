@@ -5,6 +5,7 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
 import {Script, console} from "forge-std/Script.sol";
 
 import {SepehrCore} from "../src/SepehrCore.sol";
+import {SepehrSubscriptions} from "../src/SepehrSubscriptions.sol";
 import {AaveV3Adapter} from "../src/adapters/AaveV3Adapter.sol";
 import {AaveFlashLoanProvider} from "../src/flash/AaveFlashLoanProvider.sol";
 import {MockChainlinkAggregator} from "../test/helpers/MockChainlinkAggregator.sol";
@@ -25,7 +26,6 @@ import {MockChainlinkAggregator} from "../test/helpers/MockChainlinkAggregator.s
 ///   SEPEHR_PAUSE_GUARDIAN   — pause guardian (usually = deployer on testnet)
 ///   USDC_ADDRESS            — Circle USDC testnet (0x75faf114...)
 ///   AAVE_POOL               — Aave V3 pool (0xBfC91D59...)
-///   AAVE_ATOKEN             — any aToken, used for adapter constructor
 ///   PROTOCOL_KEY_AAVE       — bytes32 registry key for the Aave entry
 ///   KEEPER_ADDRESS          — keeper to whitelist
 ///
@@ -48,7 +48,6 @@ contract DeployTestnetArbitrumSepolia is Script {
         address pauseGuardian = vm.envAddress("SEPEHR_PAUSE_GUARDIAN");
         address usdc = vm.envAddress("USDC_ADDRESS");
         address aavePool = vm.envAddress("AAVE_POOL");
-        address aToken = vm.envAddress("AAVE_ATOKEN");
         address keeper = vm.envAddress("KEEPER_ADDRESS");
         bytes32 aaveKey = vm.envBytes32("PROTOCOL_KEY_AAVE");
 
@@ -69,12 +68,17 @@ contract DeployTestnetArbitrumSepolia is Script {
         // 2. Core: owner is the env-provided EOA, timelock is the fresh OZ
         //    TimelockController above. expectedChainId is block.chainid so the
         //    contract locks itself to Arbitrum Sepolia at construction.
-        SepehrCore core =
-            new SepehrCore(owner, address(timelock), pauseGuardian, usdc, minCollateralUsd, tvlCapUsd, block.chainid);
+        SepehrSubscriptions subscriptions = new SepehrSubscriptions(
+            owner, address(timelock), usdc, block.chainid, vm.computeCreateAddress(deployer, vm.getNonce(deployer) + 1)
+        );
+        console.log("SUBSCRIPTIONS", address(subscriptions));
+        SepehrCore core = new SepehrCore(
+            owner, address(timelock), pauseGuardian, address(subscriptions), minCollateralUsd, tvlCapUsd, block.chainid
+        );
         console.log("CORE", address(core));
 
-        // 3. Aave V3 adapter bound to the real Sepolia pool + aToken.
-        AaveV3Adapter aaveAdapter = new AaveV3Adapter(aavePool, aToken, address(core));
+        // 3. Aave V3 adapter on the real Sepolia pool (any of its collaterals).
+        AaveV3Adapter aaveAdapter = new AaveV3Adapter(aavePool, address(core));
         console.log("ADAPTER_AAVE_V3", address(aaveAdapter));
 
         // 4. Aave flash loan provider — timelock-owned so the ownership

@@ -27,6 +27,7 @@ contract MockMorpho is IMorpho {
     mapping(bytes32 => Market) private _markets;
     mapping(bytes32 => MarketParams) private _marketParams;
     mapping(address => mapping(address => bool)) private _authorized;
+    mapping(bytes32 paramsHash => bytes32 id) private _ids;
 
     // ── Call recording ───────────────────────────────────────────────────
 
@@ -75,6 +76,7 @@ contract MockMorpho is IMorpho {
         uint256 lltv
     ) external {
         _marketParams[id] = MarketParams(loanToken, collateralToken, oracle, irm, lltv);
+        _ids[keccak256(abi.encode(_marketParams[id]))] = id;
     }
 
     function setAuthorized(
@@ -125,8 +127,21 @@ contract MockMorpho is IMorpho {
         lastRepayShares = shares;
         lastRepayOnBehalf = onBehalf;
         lastRepayData = data;
+        // Repaid by shares: the assets they stand for, rounded up as Morpho rounds them.
+        if (shares != 0) {
+            Market memory m = _markets[_idOf(marketParams)];
+            assets = m.totalBorrowShares == 0
+                ? shares
+                : (shares * m.totalBorrowAssets + m.totalBorrowShares - 1) / m.totalBorrowShares;
+        }
         IERC20(marketParams.loanToken).transferFrom(msg.sender, address(this), assets);
         return (assets, shares);
+    }
+
+    function _idOf(
+        MarketParams memory marketParams
+    ) private view returns (bytes32) {
+        return _ids[keccak256(abi.encode(marketParams))];
     }
 
     function withdrawCollateral(

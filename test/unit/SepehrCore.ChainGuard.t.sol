@@ -6,10 +6,13 @@ import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import {SepehrCore} from "../../src/SepehrCore.sol";
+import {SepehrSubscriptions} from "../../src/SepehrSubscriptions.sol";
 import {IProtocolAdapter} from "../../src/interfaces/IProtocolAdapter.sol";
 import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
+import {ISepehrSubscriptions} from "../../src/interfaces/ISepehrSubscriptions.sol";
 import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
+import {SepehrStack} from "../helpers/SepehrStack.sol";
 
 contract GuardMockERC20 is ERC20 {
     constructor() ERC20("USD Coin", "USDC") {}
@@ -28,8 +31,9 @@ contract GuardMockERC20 is ERC20 {
 /// user-state view getters (subscription, protection, keeper, user-protocols);
 /// pure-constant getters (`paused()`, `TIER_FEE_BPS(...)`) stay callable because they expose
 /// no user-specific state.
-contract SepehrCoreChainGuardTest is Test {
+contract SepehrCoreChainGuardTest is SepehrStack {
     SepehrCore internal core;
+    SepehrSubscriptions internal subs;
     GuardMockERC20 internal usdc;
     MockAdapter internal adapter;
 
@@ -52,7 +56,7 @@ contract SepehrCoreChainGuardTest is Test {
         expectedChainId = block.chainid;
         wrongChainId = expectedChainId == 1 ? 42_161 : 1;
 
-        core = new SepehrCore(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max, expectedChainId);
+        (core, subs) = _deployStack(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max);
 
         vm.prank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
@@ -70,35 +74,35 @@ contract SepehrCoreChainGuardTest is Test {
         vm.chainId(wrongChainId);
         _expectWrongChainRevert();
         vm.prank(user);
-        core.subscribe(1, false);
+        subs.subscribe(1, false);
     }
 
     function test_renew_revertsOnWrongChain() public {
         vm.chainId(wrongChainId);
         _expectWrongChainRevert();
         vm.prank(user);
-        core.renew();
+        subs.renew();
     }
 
     function test_upgradeTier_revertsOnWrongChain() public {
         vm.chainId(wrongChainId);
         _expectWrongChainRevert();
         vm.prank(user);
-        core.upgradeTier(2, false);
+        subs.upgradeTier(2, false);
     }
 
     function test_unsubscribe_revertsOnWrongChain() public {
         vm.chainId(wrongChainId);
         _expectWrongChainRevert();
         vm.prank(user);
-        core.unsubscribe();
+        subs.unsubscribe();
     }
 
     function test_enableProtection_revertsOnWrongChain() public {
         vm.chainId(wrongChainId);
         _expectWrongChainRevert();
         vm.prank(user);
-        core.enableProtection(PROTOCOL_KEY, 1.5e18, 100, 5000);
+        core.enableProtection(PROTOCOL_KEY, 1.5e18, 100, 1.7e18);
     }
 
     function test_disableProtection_revertsOnWrongChain() public {
@@ -112,7 +116,7 @@ contract SepehrCoreChainGuardTest is Test {
         vm.chainId(wrongChainId);
         _expectWrongChainRevert();
         vm.prank(user);
-        core.updateProtection(PROTOCOL_KEY, 1.5e18, 100, 5000);
+        core.updateProtection(PROTOCOL_KEY, 1.5e18, 100, 1.7e18);
     }
 
     function test_execute_revertsOnWrongChain() public {
@@ -121,6 +125,20 @@ contract SepehrCoreChainGuardTest is Test {
         address[] memory flashProviders = new address[](0);
         vm.prank(keeper);
         core.execute(user, PROTOCOL_KEY, address(usdc), address(usdc), 0, flashProviders, address(0), bytes(""));
+    }
+
+    function test_close_revertsOnWrongChain() public {
+        vm.chainId(wrongChainId);
+        _expectWrongChainRevert();
+        vm.prank(keeper);
+        core.close(user, PROTOCOL_KEY, address(usdc), address(usdc), 0, new address[](0), address(0), bytes(""));
+    }
+
+    function test_setExitOrder_revertsOnWrongChain() public {
+        vm.chainId(wrongChainId);
+        _expectWrongChainRevert();
+        vm.prank(user);
+        core.setExitOrder(PROTOCOL_KEY, address(usdc), 0, 0);
     }
 
     function test_pause_revertsOnWrongChain() public {
@@ -139,7 +157,42 @@ contract SepehrCoreChainGuardTest is Test {
     function test_grantTitanSubscription_revertsOnWrongChain() public {
         vm.chainId(wrongChainId);
         _expectWrongChainRevert();
-        core.grantTitanSubscription(user, 30 days);
+        subs.grantTitanSubscription(user, 30 days);
+    }
+
+    function test_settle_revertsOnWrongChain() public {
+        vm.chainId(wrongChainId);
+        _expectWrongChainRevert();
+        subs.settle(new address[](0));
+    }
+
+    function test_withdrawRevenue_revertsOnWrongChain() public {
+        vm.chainId(wrongChainId);
+        _expectWrongChainRevert();
+        subs.withdrawRevenue();
+    }
+
+    function test_setTimelock_revertsOnWrongChain() public {
+        vm.chainId(wrongChainId);
+        _expectWrongChainRevert();
+        vm.prank(timelock);
+        core.setTimelock(user);
+        _expectWrongChainRevert();
+        vm.prank(timelock);
+        subs.setTimelock(user);
+    }
+
+    function test_clearProtections_revertsOnWrongChain() public {
+        vm.chainId(wrongChainId);
+        _expectWrongChainRevert();
+        vm.prank(address(subs));
+        core.clearProtections(user);
+    }
+
+    function test_planOf_revertsOnWrongChain() public {
+        vm.chainId(wrongChainId);
+        _expectWrongChainRevert();
+        subs.planOf(user);
     }
 
     function test_withdrawOwnerFees_revertsOnWrongChain() public {
@@ -182,7 +235,7 @@ contract SepehrCoreChainGuardTest is Test {
         vm.chainId(wrongChainId);
         _expectWrongChainRevert();
         vm.prank(timelock);
-        core.setTierFeeBps(1, 50);
+        subs.setTierFeeBps(1, 50);
     }
 
     function test_setTvlCapUsd_revertsOnWrongChain() public {
@@ -190,6 +243,13 @@ contract SepehrCoreChainGuardTest is Test {
         _expectWrongChainRevert();
         vm.prank(timelock);
         core.setTvlCapUsd(1_000_000_000_000);
+    }
+
+    function test_setOpenExecutionHF_revertsOnWrongChain() public {
+        vm.chainId(wrongChainId);
+        _expectWrongChainRevert();
+        vm.prank(timelock);
+        core.setOpenExecutionHF(0);
     }
 
     function test_setPauseGuardian_revertsOnWrongChain() public {
@@ -204,13 +264,19 @@ contract SepehrCoreChainGuardTest is Test {
     function test_getSubscription_revertsOnWrongChain() public {
         vm.chainId(wrongChainId);
         _expectWrongChainRevert();
-        core.getSubscription(user);
+        subs.getSubscription(user);
     }
 
     function test_getProtection_revertsOnWrongChain() public {
         vm.chainId(wrongChainId);
         _expectWrongChainRevert();
         core.getProtection(user, PROTOCOL_KEY);
+    }
+
+    function test_getExitOrder_revertsOnWrongChain() public {
+        vm.chainId(wrongChainId);
+        _expectWrongChainRevert();
+        core.getExitOrder(user, PROTOCOL_KEY);
     }
 
     function test_isKeeper_revertsOnWrongChain() public {
@@ -229,13 +295,13 @@ contract SepehrCoreChainGuardTest is Test {
 
     function test_tierFeeBpsGetter_unaffectedByChainGuard() public {
         vm.chainId(wrongChainId);
-        uint256 fee = core.TIER_FEE_BPS(0);
+        uint256 fee = subs.TIER_FEE_BPS(0);
         assertEq(fee, 20, "TIER_FEE_BPS should remain queryable cross-chain");
     }
 
     function test_tierMaxCollateralGetter_unaffectedByChainGuard() public {
         vm.chainId(wrongChainId);
-        uint256 cap = core.TIER_MAX_COLLATERAL_USD_8(0);
+        uint256 cap = subs.TIER_MAX_COLLATERAL_USD_8(0);
         assertEq(cap, 1_500_000_000_000, "Tier 1 cap should remain queryable cross-chain");
     }
 
@@ -255,10 +321,10 @@ contract SepehrCoreChainGuardTest is Test {
         vm.chainId(wrongChainId);
         _expectWrongChainRevert();
         vm.prank(user);
-        core.getSubscription(user);
+        subs.getSubscription(user);
 
         vm.chainId(expectedChainId);
-        ISepehrCore.Subscription memory sub = core.getSubscription(user);
+        ISepehrSubscriptions.Subscription memory sub = subs.getSubscription(user);
         assertEq(sub.tier, 0, "default tier");
         assertEq(sub.expiresAt, 0, "default expiry");
     }

@@ -52,13 +52,10 @@ interface IProtocolAdapter {
 
     /// @notice Get the user's current outstanding debt for a given debt asset, in the asset's
     ///         native decimals.
-    /// @dev Used by SepehrCore.execute() to enforce `repayPercentBps` — the contract rejects
-    ///      triggers that would repay more than the user authorized. Adapters SHOULD return 0
-    ///      if the user has no position or the protocol does not denominate the debt in this
-    ///      particular asset; SepehrCore treats 0 as "no authoritative debt reading" and
-    ///      short-circuits the percent check (the keeper still cannot over-repay because the
-    ///      flash loan and the protocol's own repay function would fail on an amount exceeding
-    ///      the true debt).
+    /// @dev Used by SepehrCore.execute() to enforce `MAX_REPAY_BPS` — the contract rejects
+    ///      triggers that would repay more than that share of the debt. Adapters return 0 only
+    ///      when the user owes nothing in this asset, and SepehrCore then reverts with
+    ///      `NoDebtToRepay` (M-6).
     /// @param user The borrower.
     /// @param debtAsset The debt asset whose outstanding balance is requested.
     /// @return debt The user's outstanding debt, in the asset's native decimals.

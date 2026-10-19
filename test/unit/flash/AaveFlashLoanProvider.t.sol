@@ -147,7 +147,7 @@ contract AaveFlashLoanProviderTest is Test {
         callback.setReentrantAmount(BORROW_AMOUNT);
         callback.setReentrantTrigger(true);
 
-        vm.expectRevert();
+        vm.expectRevert(SepehrErrors.ConcurrentFlashLoan.selector);
         provider.flashBorrow(address(token), BORROW_AMOUNT, address(callback), "");
     }
 

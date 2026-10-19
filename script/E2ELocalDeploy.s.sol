@@ -5,6 +5,7 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
 import {Script, console} from "forge-std/Script.sol";
 
 import {SepehrCore} from "../src/SepehrCore.sol";
+import {SepehrSubscriptions} from "../src/SepehrSubscriptions.sol";
 import {AaveV3Adapter} from "../src/adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../src/adapters/CompoundV3Adapter.sol";
 import {MorphoBlueAdapter} from "../src/adapters/MorphoBlueAdapter.sol";
@@ -26,7 +27,6 @@ import {MockChainlinkAggregator} from "../test/helpers/MockChainlinkAggregator.s
 ///   USDC_ADDRESS        — canonical USDC on the forked chain
 ///   WETH_ADDRESS        — canonical WETH on the forked chain
 ///   AAVE_POOL           — Aave v3 pool
-///   AAVE_ATOKEN         — any aToken (used for adapter construction)
 ///   PROTOCOL_KEY_AAVE   — bytes32 protocol key for the Aave adapter registry entry
 ///
 /// Optional (each one gated — absent = skip):
@@ -53,9 +53,18 @@ contract E2ELocalDeploy is Script {
         address[] memory executors = new address[](1);
         executors[0] = deployer;
         TimelockController timelock = new TimelockController(0, proposers, executors, address(0));
-        SepehrCore core =
-            new SepehrCore(deployer, address(timelock), deployer, usdc, 0, type(uint256).max, block.chainid);
+        SepehrSubscriptions subscriptions = new SepehrSubscriptions(
+            deployer,
+            address(timelock),
+            usdc,
+            block.chainid,
+            vm.computeCreateAddress(deployer, vm.getNonce(deployer) + 1)
+        );
+        SepehrCore core = new SepehrCore(
+            deployer, address(timelock), deployer, address(subscriptions), 0, type(uint256).max, block.chainid
+        );
         console.log("TIMELOCK", address(timelock));
+        console.log("SUBSCRIPTIONS", address(subscriptions));
         console.log("CORE", address(core));
 
         MockChainlinkAggregator ethOracle = new MockChainlinkAggregator(8, 300_000_000_000);
@@ -66,8 +75,7 @@ contract E2ELocalDeploy is Script {
         console.log("MOCK_USDC_ORACLE", address(usdcOracle));
 
         address aavePool = vm.envAddress("AAVE_POOL");
-        address aToken = vm.envAddress("AAVE_ATOKEN");
-        AaveV3Adapter aaveAdapter = new AaveV3Adapter(aavePool, aToken, address(core));
+        AaveV3Adapter aaveAdapter = new AaveV3Adapter(aavePool, address(core));
         AaveFlashLoanProvider aaveFlash = new AaveFlashLoanProvider(aavePool, address(timelock));
         console.log("ADAPTER_AAVE_V3", address(aaveAdapter));
         console.log("FLASH_AAVE", address(aaveFlash));

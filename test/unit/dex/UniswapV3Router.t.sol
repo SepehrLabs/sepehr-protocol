@@ -209,4 +209,81 @@ contract UniswapV3RouterTest is Test {
         assertEq(tokenIn.balanceOf(address(router)), 0, "dust left behind in router");
         assertEq(tokenIn.balanceOf(address(this)), callerBefore - SWAP_AMOUNT + dust, "dust not swept to caller");
     }
+
+    // ── Paths (exactInput) ───────────────────────────────────────────────
+
+    address constant HUB = address(0x4B1D);
+
+    function _twoHop() internal view returns (bytes memory) {
+        return abi.encodePacked(address(tokenIn), uint24(100), HUB, uint24(500), address(tokenOut));
+    }
+
+    function _fundCaller() internal {
+        tokenIn.mint(address(this), SWAP_AMOUNT);
+        tokenIn.approve(address(router), SWAP_AMOUNT);
+    }
+
+    function test_swap_pathSwapsThroughExactInput() public {
+        _fundCaller();
+        bytes memory path = _twoHop();
+
+        uint256 amountOut = router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, abi.encode(path));
+
+        assertEq(amountOut, SWAP_AMOUNT);
+        assertEq(tokenOut.balanceOf(address(this)), SWAP_AMOUNT);
+        assertEq(swapRouter.lastPath(), path);
+        assertEq(swapRouter.lastDeadline(), block.timestamp);
+        assertEq(IERC20(address(tokenIn)).allowance(address(router), address(swapRouter)), 0);
+        assertEq(tokenIn.balanceOf(address(router)), 0);
+    }
+
+    function test_swap_acceptsSingleHopPath() public {
+        _fundCaller();
+        bytes memory path = abi.encodePacked(address(tokenIn), uint24(500), address(tokenOut));
+
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, abi.encode(path));
+        assertEq(swapRouter.lastPath(), path);
+    }
+
+    function test_swap_pathRevertsWhenItDoesNotStartAtTokenIn() public {
+        _fundCaller();
+        bytes memory path = abi.encodePacked(HUB, uint24(500), address(tokenOut));
+
+        vm.expectRevert(SepehrErrors.InvalidRouteData.selector);
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, abi.encode(path));
+    }
+
+    function test_swap_pathRevertsWhenItDoesNotEndAtTokenOut() public {
+        _fundCaller();
+        bytes memory path = abi.encodePacked(address(tokenIn), uint24(500), HUB);
+
+        vm.expectRevert(SepehrErrors.InvalidRouteData.selector);
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, abi.encode(path));
+    }
+
+    function test_swap_pathRevertsWhenMalformed() public {
+        _fundCaller();
+        // One stray byte after the last token: 20 + 3 + 20 + 1 bytes.
+        bytes memory path = abi.encodePacked(address(tokenIn), uint24(500), address(tokenOut), uint8(0));
+
+        vm.expectRevert(SepehrErrors.InvalidRouteData.selector);
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, abi.encode(path));
+    }
+
+    function test_swap_pathRevertsBelowMinAmountOut() public {
+        _fundCaller();
+        swapRouter.setExchangeRate(0.9e18);
+
+        vm.expectRevert("MockV3: slippage");
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, SWAP_AMOUNT, abi.encode(_twoHop()));
+    }
+
+    function test_swap_pathSweepsPreSeededDust() public {
+        tokenIn.mint(address(router), 7e18);
+        _fundCaller();
+
+        router.swap(address(tokenIn), address(tokenOut), SWAP_AMOUNT, 0, abi.encode(_twoHop()));
+        assertEq(tokenIn.balanceOf(address(router)), 0);
+        assertEq(tokenIn.balanceOf(address(this)), 7e18);
+    }
 }

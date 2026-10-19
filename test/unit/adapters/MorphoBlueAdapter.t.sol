@@ -167,6 +167,46 @@ contract MorphoBlueAdapterTest is Test {
         assertEq(morpho.lastRepayData(), "");
     }
 
+    function test_repay_revertsForAnotherAssetThanTheLoanToken() public {
+        vm.prank(core);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SepehrErrors.DebtAssetMismatch.selector, address(loanToken), address(collateralToken)
+            )
+        );
+        adapter.repay(user, address(collateralToken), 1e18);
+    }
+
+    /// @dev Lot 6: a close repays the whole debt; Morpho takes it by shares, so no dust is
+    /// left, and the unused part of the amount goes back to the core.
+    function test_repay_coveringTheWholeDebt_repaysEveryShare() public {
+        morpho.setPosition(MARKET_ID, user, 0, 300e6, 10e18);
+        morpho.setMarket(MARKET_ID, 0, 0, 1000e18, 1000e6, uint128(block.timestamp), 0);
+        uint256 debt = adapter.getDebt(user, address(loanToken));
+        assertEq(debt, 300e18);
+        loanToken.mint(address(adapter), debt + 1e18);
+
+        vm.prank(core);
+        adapter.repay(user, address(loanToken), debt + 1e18);
+
+        assertEq(morpho.lastRepayAssets(), 0, "repaid by shares");
+        assertEq(morpho.lastRepayShares(), 300e6, "every share");
+        assertEq(loanToken.balanceOf(address(morpho)), debt);
+        assertEq(loanToken.balanceOf(core), 1e18, "the rest goes back to the core");
+    }
+
+    function test_repay_underTheDebt_repaysAssets() public {
+        morpho.setPosition(MARKET_ID, user, 0, 300e6, 10e18);
+        morpho.setMarket(MARKET_ID, 0, 0, 1000e18, 1000e6, uint128(block.timestamp), 0);
+        loanToken.mint(address(adapter), 100e18);
+
+        vm.prank(core);
+        adapter.repay(user, address(loanToken), 100e18);
+
+        assertEq(morpho.lastRepayAssets(), 100e18);
+        assertEq(morpho.lastRepayShares(), 0);
+    }
+
     function test_repay_transfersTokensToMorpho() public {
         uint256 amount = 500e18;
         loanToken.mint(address(adapter), amount);

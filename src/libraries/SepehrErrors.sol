@@ -5,6 +5,18 @@ library SepehrErrors {
     error NotKeeper();
     error NotOwner();
     error NotTimelock();
+    /// @notice Only SepehrSubscriptions may clear a user's protections.
+    error NotSubscriptions();
+    /// @notice SepehrCore and SepehrSubscriptions must name each other at deployment.
+    error CoreMismatch();
+    /// @notice A stop-loss must sit below the take-profit.
+    error InvalidExitOrder(uint256 stopLossUsd, uint256 takeProfitUsd);
+    /// @notice The position has no stop-loss or take-profit to execute.
+    error NoExitOrder(address user, bytes32 protocolKey);
+    /// @notice The oracle price is between the stop-loss and the take-profit.
+    error ExitConditionNotMet(uint256 price);
+    /// @notice Open execution must start under the lowest threshold, so the keepers act first.
+    error OpenExecutionHFTooHigh(uint256 hf, uint256 max);
     error NotPauseGuardian();
     error NotAuthorized();
 
@@ -18,28 +30,28 @@ library SepehrErrors {
     /// @param actual The chain ID reported by the current transaction's EVM context.
     error WrongChain(uint256 expected, uint256 actual);
 
-    error CooldownActive(uint256 remaining);
     error HealthFactorAboveThreshold(uint256 current, uint256 threshold);
     error MaxRepayExceeded(uint256 requested, uint256 maxAllowed);
-    error RepayExceedsUserLimit(uint256 requested, uint256 allowed);
     error SlippageExceeded(uint256 actualOut, uint256 minExpected);
     /// @notice The rescue left the core with less debt asset than the flash-loan repayment plus
     /// the trigger fee (for instance a fee-on-transfer collateral).
     error InsufficientRescueProceeds(uint256 available, uint256 required);
     error HealthFactorNotImproved(uint256 hfBefore, uint256 hfAfter);
+    /// @notice The rescue lifted the health factor past the position's target plus
+    /// `TARGET_TOLERANCE`: it repaid, and charged fees on, more than the target needed.
+    error RescueOvershootsTarget(uint256 hfAfter, uint256 maxHealthFactor);
     error ImplausibleHealthFactor(uint256 hf, uint256 floor);
     error DebtAssetMismatch(address expected, address provided);
     /// @notice M-6: the adapter reports no debt of `debtAsset` for `user`.
     error NoDebtToRepay(address user, address debtAsset);
     error CollateralAssetMismatch(address expected, address provided);
-    error UnsupportedTokenBehavior(address token);
+    error UnsupportedCollateral(address asset);
 
     error SubscriptionExpired();
     error SubscriptionNotFound();
     error SubscriptionAlreadyActive();
     error InvalidTier();
     error TitanSelfSubscribeNotAllowed();
-    error InsufficientPayment(uint256 required, uint256 provided);
     error SameTierUpgrade();
     error UpgradeTierPathInvalid(uint8 fromTier, uint8 toTier);
 
@@ -50,7 +62,9 @@ library SepehrErrors {
     /// `tvlCapUsd`. `attempted` is the prospective new total; `cap` is the configured ceiling.
     error TvlCapExceeded(uint256 attempted, uint256 cap);
     error ThresholdTooLow(uint256 threshold, uint256 minimum);
-    error RepayPercentTooHigh(uint256 bps, uint256 maxBps);
+    /// @notice The target sits less than `MIN_TARGET_GAP` above the threshold.
+    error TargetTooLow(uint256 target, uint256 minimum);
+    error TargetTooHigh(uint256 target, uint256 maximum);
     error InvalidSlippage(uint256 bps);
     error TierFeeBpsTooHigh(uint256 bps, uint256 maxBps);
     error TierPriceDeviationTooLarge(uint256 oldPrice, uint256 newPrice);
@@ -68,6 +82,8 @@ library SepehrErrors {
     error NoCanonicalRoute(address router, address tokenIn, address tokenOut);
     error SameToken();
     error InvalidRouteData();
+    /// @notice Lot 7: the aggregator calldata calls a function the router does not allow.
+    error SelectorNotAllowed(bytes4 selector);
 
     error MissingAssetOracle(address asset);
     error StaleOraclePrice(address asset, uint256 updatedAt, uint256 nowTs);
@@ -78,8 +94,6 @@ library SepehrErrors {
     error SequencerDown();
     /// @notice L-5: the sequencer came back up less than `SEQUENCER_GRACE_PERIOD` ago.
     error SequencerGracePeriodNotOver(uint256 upSince);
-    /// @notice I-2: a repay share this low makes every trigger revert.
-    error RepayPercentTooLow(uint256 provided, uint256 min);
 
     error ProtectionNotEnabled(address user, bytes32 protocolKey);
     error ProtectionAlreadyEnabled(address user, bytes32 protocolKey);

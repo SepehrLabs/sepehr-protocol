@@ -85,11 +85,13 @@ contract MorphoLike is IMorpho {
     function repay(
         MarketParams memory p,
         uint256 assets,
-        uint256,
+        uint256 shares,
         address onBehalf,
         bytes memory
     ) external returns (uint256, uint256) {
         bytes32 id = marketId(p);
+        // One share per asset here: repaying by shares repays as many assets.
+        if (shares != 0) assets = shares;
         // Like Morpho: repaying more than the debt underflows and reverts.
         _pos[id][onBehalf].borrowShares -= uint128(assets);
         _market[id].totalBorrowAssets -= uint128(assets);

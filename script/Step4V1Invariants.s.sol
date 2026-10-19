@@ -23,13 +23,11 @@ import {SepehrErrors} from "../src/libraries/SepehrErrors.sol";
 ///   CORE                — previously deployed SepehrCore (from 02-deploy-local.ts)
 ///   TIMELOCK            — the zero-delay E2E timelock
 ///   DEPLOYER_ADDRESS    — anvil account 0; proposer + executor on the timelock, pauseGuardian of Core
-///   USDC_ADDRESS        — canonical USDC (constructor param for the fresh WrongChain Core)
 contract Step4V1Invariants is Script {
     function run() external {
         address coreAddr = vm.envAddress("CORE");
         address timelockAddr = vm.envAddress("TIMELOCK");
         address deployer = vm.envAddress("DEPLOYER_ADDRESS");
-        address usdc = vm.envAddress("USDC_ADDRESS");
 
         SepehrCore core = SepehrCore(coreAddr);
         TimelockController timelock = TimelockController(payable(timelockAddr));
@@ -38,7 +36,7 @@ contract Step4V1Invariants is Script {
         require(core.expectedChainId() == 42_161, "precondition: V1 must be mono-Arbitrum");
         console.log("precondition OK: expectedChainId=42161 matches live chainid");
 
-        _test44ChainGuard(deployer, timelockAddr, usdc);
+        _test44ChainGuard(deployer, timelockAddr, address(core.subscriptions()));
         _test46Pause(core, timelock, deployer);
         _test47Rotation(core, timelock, deployer);
         _test45TvlCap(core, timelock, deployer);
@@ -50,11 +48,11 @@ contract Step4V1Invariants is Script {
     function _test44ChainGuard(
         address deployer,
         address timelockAddr,
-        address usdc
+        address subscriptions
     ) internal {
         uint256 wrongChainId = 1; // Ethereum mainnet — not what block.chainid == 42161 on fork
         vm.startBroadcast(deployer);
-        try new SepehrCore(deployer, timelockAddr, deployer, usdc, 0, type(uint256).max, wrongChainId) {
+        try new SepehrCore(deployer, timelockAddr, deployer, subscriptions, 0, type(uint256).max, wrongChainId) {
             revert("4.4 chain guard FAILED: SepehrCore accepted wrong expectedChainId");
         } catch (bytes memory reason) {
             bytes4 sel;
@@ -83,7 +81,7 @@ contract Step4V1Invariants is Script {
 
         // Verify gated entry points revert while paused. `subscribe(3, false)` is whenNotPaused.
         vm.startBroadcast(deployer);
-        try core.subscribe(3, false) {
+        try core.subscriptions().subscribe(3, false) {
             revert("4.6 pause FAILED: subscribe accepted while paused");
         } catch (bytes memory reason) {
             bytes4 sel;

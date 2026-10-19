@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {Script, console} from "forge-std/Script.sol";
 
 import {SepehrCore} from "../src/SepehrCore.sol";
+import {SepehrSubscriptions} from "../src/SepehrSubscriptions.sol";
 import {MorphoBlueAdapter} from "../src/adapters/MorphoBlueAdapter.sol";
 import {UniswapV3Router} from "../src/dex/UniswapV3Router.sol";
 import {AaveFlashLoanProvider} from "../src/flash/AaveFlashLoanProvider.sol";
@@ -25,7 +26,7 @@ import {Multicall3Lite} from "../test/helpers/Multicall3Lite.sol";
 ///
 /// Required env: DEPLOYER_ADDRESS (anvil account 0), KEEPER_ADDRESS (anvil account 1).
 contract E2EKeeperLocalDeploy is Script {
-    bytes32 internal constant MORPHO_KEY = keccak256("morpho-blue-arbitrum");
+    bytes32 internal constant MORPHO_KEY = keccak256("morpho-blue-arbitrum-wbtc-usdc");
     uint256 internal constant LLTV = 0.86e18;
     uint256 internal constant ETH_USD_8 = 3300e8;
 
@@ -53,8 +54,15 @@ contract E2EKeeperLocalDeploy is Script {
             })
         );
 
+        SepehrSubscriptions subscriptions = new SepehrSubscriptions(
+            deployer,
+            deployer,
+            address(usdc),
+            block.chainid,
+            vm.computeCreateAddress(deployer, vm.getNonce(deployer) + 1)
+        );
         SepehrCore core =
-            new SepehrCore(deployer, deployer, deployer, address(usdc), 0, type(uint256).max, block.chainid);
+            new SepehrCore(deployer, deployer, deployer, address(subscriptions), 0, type(uint256).max, block.chainid);
         MockChainlinkAggregator usdcFeed = new MockChainlinkAggregator(8, 1e8);
         MorphoBlueAdapter adapter = new MorphoBlueAdapter(address(morpho), marketId, address(usdcFeed), address(core));
 
@@ -83,6 +91,7 @@ contract E2EKeeperLocalDeploy is Script {
         vm.stopBroadcast();
 
         console.log("CORE", address(core));
+        console.log("SUBSCRIPTIONS", address(subscriptions));
         console.log("ADAPTER", address(adapter));
         console.log("MORPHO", address(morpho));
         console.log("MORPHO_ORACLE", address(morphoOracle));

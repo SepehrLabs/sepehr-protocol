@@ -4,14 +4,18 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 
 import {SepehrCore} from "../../src/SepehrCore.sol";
+import {SepehrSubscriptions} from "../../src/SepehrSubscriptions.sol";
 import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
+import {ISepehrSubscriptions} from "../../src/interfaces/ISepehrSubscriptions.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockDex} from "../../src/mocks/MockDex.sol";
 import {MockFlashLoan} from "../../src/mocks/MockFlashLoan.sol";
+import {SepehrStack} from "../helpers/SepehrStack.sol";
 import {InvariantERC20, SepehrCoreHandler} from "./SepehrCoreHandler.sol";
 
-contract SepehrCoreInvariantTest is Test {
+contract SepehrCoreInvariantTest is SepehrStack {
     SepehrCore public core;
+    SepehrSubscriptions public subs;
     InvariantERC20 public usdc;
     InvariantERC20 public weth;
     MockAdapter public adapter;
@@ -33,7 +37,7 @@ contract SepehrCoreInvariantTest is Test {
         flashLoan = new MockFlashLoan();
         dex = new MockDex();
 
-        core = new SepehrCore(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max, block.chainid);
+        (core, subs) = _deployStack(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max);
 
         vm.startPrank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
@@ -52,7 +56,7 @@ contract SepehrCoreInvariantTest is Test {
     function invariant_subscriptionTierBounded() public view {
         for (uint256 i = 0; i < handler.actorCount(); i++) {
             address actor = handler.actors(i);
-            ISepehrCore.Subscription memory sub = core.getSubscription(actor);
+            ISepehrSubscriptions.Subscription memory sub = subs.getSubscription(actor);
             assertTrue(sub.tier <= 4, "tier must be 0-4");
         }
     }
@@ -62,7 +66,7 @@ contract SepehrCoreInvariantTest is Test {
     function invariant_zeroTierImpliesZeroExpiry() public view {
         for (uint256 i = 0; i < handler.actorCount(); i++) {
             address actor = handler.actors(i);
-            ISepehrCore.Subscription memory sub = core.getSubscription(actor);
+            ISepehrSubscriptions.Subscription memory sub = subs.getSubscription(actor);
             if (sub.tier == 0) {
                 assertEq(sub.expiresAt, 0, "tier 0 must have expiresAt 0");
             }
@@ -81,7 +85,8 @@ contract SepehrCoreInvariantTest is Test {
             if (!prot.enabled) continue;
             assertGe(prot.thresholdHF, core.MIN_HF_THRESHOLD(), "threshold below minimum");
             assertLe(prot.maxSlippageBps, core.MAX_SLIPPAGE_BPS(), "slippage above maximum");
-            assertLe(prot.repayPercentBps, core.MAX_REPAY_BPS(), "repay above maximum");
+            assertGe(prot.targetHF, prot.thresholdHF + core.MIN_TARGET_GAP(), "target too close to threshold");
+            assertLe(prot.targetHF, core.MAX_TARGET_HF(), "target above maximum");
         }
     }
 
@@ -90,7 +95,7 @@ contract SepehrCoreInvariantTest is Test {
     function invariant_activeSubscriptionHasValidTier() public view {
         for (uint256 i = 0; i < handler.actorCount(); i++) {
             address actor = handler.actors(i);
-            ISepehrCore.Subscription memory sub = core.getSubscription(actor);
+            ISepehrSubscriptions.Subscription memory sub = subs.getSubscription(actor);
             if (sub.expiresAt > block.timestamp) {
                 assertTrue(sub.tier >= 1 && sub.tier <= 4, "active sub must have tier 1-4");
             }
@@ -100,10 +105,10 @@ contract SepehrCoreInvariantTest is Test {
     // ── Invariant 5: Tier fee BPS unchanged without timelock ───────
 
     function invariant_tierFeeBpsUnchanged() public view {
-        assertEq(core.TIER_FEE_BPS(0), 20, "Shield fee should remain 20 bps");
-        assertEq(core.TIER_FEE_BPS(1), 10, "Guardian fee should remain 10 bps");
-        assertEq(core.TIER_FEE_BPS(2), 5, "Watchtower fee should remain 5 bps");
-        assertEq(core.TIER_FEE_BPS(3), 5, "Titan fee should remain 5 bps");
+        assertEq(subs.TIER_FEE_BPS(0), 20, "Shield fee should remain 20 bps");
+        assertEq(subs.TIER_FEE_BPS(1), 15, "Guardian fee should remain 15 bps");
+        assertEq(subs.TIER_FEE_BPS(2), 10, "Watchtower fee should remain 10 bps");
+        assertEq(subs.TIER_FEE_BPS(3), 10, "Titan fee should remain 10 bps");
     }
 
     // ── Invariant 6: Adapter remains registered ─────────────────────
@@ -140,6 +145,17 @@ contract SepehrCoreInvariantTest is Test {
     function invariant_usdcTreasuryCoversFeeLedger() public view {
         uint256 ledger = core.ownerFeeBalances(address(usdc)) + core.keeperFeeBalances(keeper, address(usdc));
         assertGe(usdc.balanceOf(address(core)), ledger, "USDC treasury under-funded");
+    }
+
+    // ── M-1: the plans' USDC is the settled revenue plus every unsettled prepayment ──
+
+    function invariant_subscriptionsTreasuryIsRevenuePlusUnsettledPrepayments() public view {
+        uint256 unsettled;
+        for (uint256 i = 0; i < handler.actorCount(); i++) {
+            (uint256 paid,, uint256 settled) = subs.subscriptionPayments(handler.actors(i));
+            unsettled += paid - settled;
+        }
+        assertEq(usdc.balanceOf(address(subs)), subs.ownerRevenue() + unsettled, "plans treasury mismatch");
     }
 
     // ── M-2: the TVL running total is the sum of the position snapshots ──

@@ -13,8 +13,8 @@ import {IFlashLoanProvider} from "./interfaces/IFlashLoanProvider.sol";
 import {IProtocolAdapter} from "./interfaces/IProtocolAdapter.sol";
 import {ISepehrCallback} from "./interfaces/ISepehrCallback.sol";
 import {ISepehrCore} from "./interfaces/ISepehrCore.sol";
+import {ISepehrSubscriptions} from "./interfaces/ISepehrSubscriptions.sol";
 import {IChainlinkAggregator} from "./interfaces/external/IChainlinkAggregator.sol";
-import {HealthFactorMath} from "./libraries/HealthFactorMath.sol";
 import {Percentages} from "./libraries/Percentages.sol";
 import {SepehrErrors} from "./libraries/SepehrErrors.sol";
 import {SepehrEvents} from "./libraries/SepehrEvents.sol";
@@ -24,23 +24,25 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
     // ─── Constants ───────────────────────────────────────────────
     uint256 public constant MIN_HF_THRESHOLD = 1.2e18;
+    /// @notice Largest share of the debt one rescue may repay. A position the cap stops short of
+    /// its target stays under its threshold and is rescued again at once.
     uint256 public constant MAX_REPAY_BPS = 5000;
-    /// @notice I-2: lowest repay share a protection accepts. At 0 every trigger reverted with
-    /// `RepayExceedsUserLimit`, a protection paid for that could never act.
-    uint256 public constant MIN_REPAY_BPS = 100;
+    /// @notice Smallest gap between a protection's threshold and its target. The gap is what
+    /// stops rescues from repeating: a rescue lands at the target, and the next one needs the
+    /// health factor to fall back under the threshold.
+    uint256 public constant MIN_TARGET_GAP = 0.05e18;
+    /// @notice Highest target a protection accepts.
+    uint256 public constant MAX_TARGET_HF = 2.5e18;
+    /// @notice How far above its target a rescue may leave a position. A rescue past it repaid,
+    /// and charged fees on, more than the target needed; one that stops below the target is
+    /// accepted, so a price moving between the keeper's sizing and the block never voids a rescue.
+    uint256 public constant TARGET_TOLERANCE = 0.05e18;
     /// @notice Maximum slippage a user may configure for collateral→debt swaps during triggers.
     /// @dev Capped at 3% because the swap route and router are keeper-controlled: wider caps
     /// permit a keeper to sandwich their own trigger and capture the difference as MEV. 3% is
     /// the industry-typical upper bound for distressed-position swaps; above this, the keeper
     /// should simulate with a tighter bound off-chain.
     uint256 public constant MAX_SLIPPAGE_BPS = 300;
-    uint256 public constant COOLDOWN_SECONDS = 3600;
-    /// @notice H-2: during the cooldown a position can be rescued again once its health factor
-    /// has fallen this far (in bps) below what the previous trigger left. 1% ignores the slow
-    /// drift of accruing interest while letting a falling market re-trigger.
-    uint256 public constant RETRIGGER_HF_DROP_BPS = 100;
-    uint256 public constant MONTHLY_PERIOD = 30 days;
-    uint256 public constant ANNUAL_PERIOD = 365 days;
 
     /// @notice B15: plausibility floor for `hfBefore` at execute time. Liquidations on every
     /// supported lending market happen at HF = 1.0 (WAD = 1e18); any adapter reporting an HF
@@ -50,30 +52,6 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// 0.5e18 is well below the minimum user-configurable threshold (1.2e18) so the floor never
     /// interferes with legitimate protection; it kicks in only on pathological / attacker reads.
     uint256 public constant MIN_PLAUSIBLE_HF_WAD = 0.5e18;
-
-    /// @notice Hard ceiling on any per-tier trigger fee. A8: `setTierFeeBps` must not be able to
-    /// raise the fee beyond this value, because existing subscribers cannot revoke faster than
-    /// the timelock can propose — a compromised/malicious timelock proposal could otherwise set
-    /// a fee of e.g. 99.99% and capture user collateral on every trigger. 100 bps = 1% is well
-    /// above the highest launched tier (20 bps); anything above this requires a contract
-    /// migration rather than a parameter tweak.
-    uint256 public constant MAX_TIER_FEE_BPS = 100;
-
-    /// @notice A13: hard ceiling on a single tier-price change, expressed in basis points of
-    /// the previous price. Blocks a compromised / hasty timelock proposal from retro-pricing a
-    /// tier to ~0 or 100× in one call — either would silently harm subscribers about to pay at
-    /// the new price (refunds and upgrade credits follow what was paid, M-1). 5000 bps (±50%) lets
-    /// governance track USDC depegs or genuine cost changes while forcing a pathological move
-    /// to span multiple 48h-delayed proposals (giving subscribers time to unsubscribe in between).
-    uint256 public constant MAX_TIER_PRICE_DEVIATION_BPS = 5000;
-
-    /// @notice M1: minimum interval between successive `setTierPrice` calls for the same
-    /// (tier, annual) key. Combined with `MAX_TIER_PRICE_DEVIATION_BPS` (±50%) and the 48h
-    /// timelock, this prevents governance from compounding two back-to-back 50% cuts within
-    /// one 96h window (would total a 75% price drop and retro-harm prepaid annual subscribers).
-    /// 7 days gives affected subscribers a full week between any two consecutive price shifts
-    /// to exit via `unsubscribe` (which pro-rates what they paid, M-1).
-    uint256 public constant TIER_PRICE_UPDATE_COOLDOWN = 7 days;
 
     /// @notice Maximum duration a single `pause()` call may freeze the contract. A11: without an
     /// auto-expiry a compromised owner/guardian key can permanently censor protections; the
@@ -105,34 +83,10 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// so feeds can catch up before triggers size withdrawals and swaps on them.
     uint256 public constant SEQUENCER_GRACE_PERIOD = 1 hours;
 
-    uint256[3] public TIER_PRICES_MONTHLY_USD_6 = [
-        9_000_000, // Shield: $9/mo
-        49_000_000, // Guardian: $49/mo
-        200_000_000 // Watchtower: $200/mo
-    ];
-
-    uint256[3] public TIER_PRICES_ANNUAL_USD_6 = [
-        86_400_000, // Shield: $86.40/yr
-        470_400_000, // Guardian: $470.40/yr
-        1_920_000_000 // Watchtower: $1,920/yr
-    ];
-
-    uint256[4] public TIER_FEE_BPS = [
-        20, // Shield: 0.20%
-        10, // Guardian: 0.10%
-        5, // Watchtower: 0.05%
-        5 // Titan: 0.05%
-    ];
-
-    uint256[4] public TIER_MAX_COLLATERAL_USD_8 = [
-        15_000e8, // Shield: up to $15k
-        100_000e8, // Guardian: up to $100k
-        300_000e8, // Watchtower: up to $300k
-        type(uint256).max // Titan: unlimited
-    ];
-
     // ─── State ───────────────────────────────────────────────────
-    IERC20 public immutable usdc;
+    /// @notice The plans users subscribe to: what `enableProtection` and `execute` check of a
+    /// user (tier, expiry, collateral cap, trigger fee), read through `planOf`.
+    ISepehrSubscriptions public immutable subscriptions;
     /// @notice Chain ID this SepehrCore instance is authorized to operate on. Captured at
     /// construction and enforced by `onlyExpectedChain` on every mutative entry-point plus the
     /// user-state view getters. V1 pivots mono-Arbitrum: the deploy script restricts this
@@ -229,42 +183,25 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         uint256 addedAt;
     }
 
-    mapping(address => Subscription) internal _subscriptions;
-
-    /// @notice M-1: what the user paid for the current subscription window and when that window
-    /// started. Refunds and upgrade credits are pro-rated on it, never on the live tier price,
-    /// so prepaying before a price rise cannot draw more than was paid.
-    struct SubscriptionPayment {
-        uint256 paid;
-        uint256 startedAt;
-    }
-
-    mapping(address user => SubscriptionPayment) public subscriptionPayments;
     mapping(address => mapping(bytes32 => PositionProtection)) internal _protections;
     /// @notice A18: ordered list of protocol keys for which `user` has protection enabled.
     /// Maintained by `enableProtection` (push) and `disableProtection` (swap-pop). `unsubscribe`
     /// iterates this list to wipe `_protections` entries on cancellation, so a later
     /// re-subscribe starts from a clean slate instead of silently re-activating stale params.
     mapping(address user => bytes32[]) internal _userProtocols;
-    /// @notice A16: per-(user, protocol) cooldown timestamp. Keyed by `user` and `protocolKey`
-    /// so a trigger on one protocol cannot lock out protection on another.
-    mapping(address user => mapping(bytes32 protocolKey => uint256)) public lastTriggerTime;
-    /// @notice H-2: health factor the last trigger left on `(user, protocolKey)`.
-    mapping(address user => mapping(bytes32 protocolKey => uint256)) public lastTriggerHealthFactor;
+    /// @notice Lot 6: each protected position's stop-loss and take-profit, on an oracle price.
+    mapping(address user => mapping(bytes32 protocolKey => ExitOrder)) internal _exitOrders;
+    /// @notice Lot 6 (D4): under this health factor anyone may rescue a position, not only a
+    /// keeper; 0, the default, keeps rescues to the keepers. Set by the timelock.
+    uint256 public openExecutionHF;
 
-    /// @notice Accrued protocol-owner revenue per token address (debt asset of triggers, USDC for subscriptions).
+    /// @notice Accrued protocol-owner trigger fees per token address (the debt asset of each trigger).
     /// @dev Per-asset accounting is mandatory because trigger fees accrue in whatever debt asset the user
-    /// was borrowing (DAI, WETH, USDT, …), while subscriptions always accrue in USDC. Collapsing these
-    /// into a single accumulator would conflate denominations.
+    /// was borrowing (DAI, WETH, USDT, …). Subscription revenue lives in SepehrSubscriptions (M-1).
     mapping(address asset => uint256 amount) public ownerFeeBalances;
 
     /// @notice Accrued keeper revenue per keeper and per asset (debt asset of the trigger).
     mapping(address keeper => mapping(address asset => uint256 amount)) public keeperFeeBalances;
-
-    /// @notice M1: last `block.timestamp` at which `setTierPrice` mutated a given
-    /// (tier, annual) key. Packed into a single slot per key; read/written inside the
-    /// cooldown check below.
-    mapping(uint8 tier => mapping(bool annual => uint256 lastUpdatedAt)) public tierPriceLastUpdatedAt;
 
     address private _activeFlashProvider;
     bytes32 private _activeSessionHash;
@@ -311,7 +248,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     /// @param _owner initial protocol owner (holds `onlyOwner` + fee-withdraw rights).
     /// @param _timelock 48h-delay governance contract; sole caller of every admin mutation.
     /// @param _pauseGuardian address able to pause alongside the owner for rapid incident response.
-    /// @param _usdc subscription payment token.
+    /// @param _subscriptions SepehrSubscriptions, deployed just before with this core's address.
     /// @param _minCollateralUsd minimum USD-8 collateral required at `enableProtection`; 0 disables.
     /// @param _tvlCapUsd G4: protocol-wide cap on the sum of snapshotted collateral USD
     /// across all active positions. Pass `type(uint256).max` to disable the cap (test fixtures
@@ -330,155 +267,39 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         address _owner,
         address _timelock,
         address _pauseGuardian,
-        address _usdc,
+        address _subscriptions,
         uint256 _minCollateralUsd,
         uint256 _tvlCapUsd,
         uint256 _expectedChainId
     ) Ownable(_owner) {
         if (_timelock == address(0)) revert SepehrErrors.ZeroAddress();
         if (_pauseGuardian == address(0)) revert SepehrErrors.ZeroAddress();
-        if (_usdc == address(0)) revert SepehrErrors.ZeroAddress();
+        if (_subscriptions == address(0)) revert SepehrErrors.ZeroAddress();
         if (_expectedChainId == 0) revert SepehrErrors.ZeroAmount();
         if (block.chainid != _expectedChainId) {
             revert SepehrErrors.WrongChain(_expectedChainId, block.chainid);
         }
+        // The two contracts name each other: SepehrSubscriptions was deployed with this address.
+        if (address(ISepehrSubscriptions(_subscriptions).core()) != address(this)) revert SepehrErrors.CoreMismatch();
 
         timelock = _timelock;
         pauseGuardian = _pauseGuardian;
-        usdc = IERC20(_usdc);
+        subscriptions = ISepehrSubscriptions(_subscriptions);
         minCollateralUsd = _minCollateralUsd;
         tvlCapUsd = _tvlCapUsd;
         expectedChainId = _expectedChainId;
     }
 
-    // ─── User: Subscriptions ─────────────────────────────────────
+    // ─── Subscriptions ───────────────────────────────────────────
 
     /// @inheritdoc ISepehrCore
-    function subscribe(
-        uint8 tier,
-        bool annual
-    ) external override onlyExpectedChain nonReentrant whenNotPaused {
-        if (tier == 0 || tier > 4) revert SepehrErrors.InvalidTier();
-        if (tier == 4) revert SepehrErrors.TitanSelfSubscribeNotAllowed();
-        if (_subscriptions[msg.sender].expiresAt > block.timestamp) {
-            revert SepehrErrors.SubscriptionAlreadyActive();
-        }
-
-        uint256 price = annual ? TIER_PRICES_ANNUAL_USD_6[tier - 1] : TIER_PRICES_MONTHLY_USD_6[tier - 1];
-        usdc.safeTransferFrom(msg.sender, address(this), price);
-        ownerFeeBalances[address(usdc)] += price;
-
-        uint256 duration = annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
-        _subscriptions[msg.sender] = Subscription({tier: tier, annual: annual, expiresAt: block.timestamp + duration});
-        subscriptionPayments[msg.sender] = SubscriptionPayment({paid: price, startedAt: block.timestamp});
-
-        emit SepehrEvents.Subscribed(msg.sender, block.timestamp + duration, tier, annual, block.chainid);
-    }
-
-    /// @inheritdoc ISepehrCore
-    function renew() external override onlyExpectedChain nonReentrant whenNotPaused {
-        Subscription storage sub = _subscriptions[msg.sender];
-        if (sub.tier == 0) revert SepehrErrors.SubscriptionNotFound();
-        if (sub.tier == 4) revert SepehrErrors.TitanSelfSubscribeNotAllowed();
-
-        uint256 price = sub.annual ? TIER_PRICES_ANNUAL_USD_6[sub.tier - 1] : TIER_PRICES_MONTHLY_USD_6[sub.tier - 1];
-        usdc.safeTransferFrom(msg.sender, address(this), price);
-        ownerFeeBalances[address(usdc)] += price;
-
-        uint256 duration = sub.annual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
-        // M-1: an active window grows by this payment; an expired one is fully used up, so the
-        // renewal opens a new window.
-        if (sub.expiresAt > block.timestamp) {
-            subscriptionPayments[msg.sender].paid += price;
-            sub.expiresAt += duration;
-        } else {
-            subscriptionPayments[msg.sender] = SubscriptionPayment({paid: price, startedAt: block.timestamp});
-            sub.expiresAt = block.timestamp + duration;
-        }
-
-        emit SepehrEvents.Renewed(msg.sender, sub.expiresAt, sub.tier, sub.annual);
-    }
-
-    /// @inheritdoc ISepehrCore
-    /// @dev A12: users on tier 1/2 could previously only switch tier by unsubscribing and
-    /// re-subscribing, which either forfeited the remaining prepaid window (before H25) or
-    /// round-tripped funds through the refund path (after H25). `upgradeTier` gives a single
-    /// atomic path: the user pays the new tier's price minus a pro-rata credit for the unused
-    /// portion of what they paid for their existing subscription (M-1). The credit is bounded by
-    /// `ownerFeeBalances[usdc]` so the protocol cannot over-credit a drained treasury.
-    /// Downgrades (new price ≤ credit) are allowed and simply refund the difference; same-
-    /// tier-same-cadence calls revert with `SameTierUpgrade`. Titan (tier 4) remains
-    /// owner-granted only.
-    function upgradeTier(
-        uint8 newTier,
-        bool newAnnual
-    ) external override onlyExpectedChain nonReentrant whenNotPaused {
-        if (newTier == 0 || newTier > 4) revert SepehrErrors.InvalidTier();
-        if (newTier == 4) revert SepehrErrors.TitanSelfSubscribeNotAllowed();
-
-        Subscription storage sub = _subscriptions[msg.sender];
-        if (sub.tier == 0) revert SepehrErrors.SubscriptionNotFound();
-        if (sub.expiresAt <= block.timestamp) revert SepehrErrors.SubscriptionExpired();
-        if (sub.tier == 4) revert SepehrErrors.UpgradeTierPathInvalid(4, newTier);
-        if (sub.tier == newTier && sub.annual == newAnnual) revert SepehrErrors.SameTierUpgrade();
-
-        uint256 credit = _unusedSubscriptionValue(msg.sender);
-        {
-            uint256 avail = ownerFeeBalances[address(usdc)];
-            if (credit > avail) credit = avail;
-        }
-
-        uint256 newPrice = newAnnual ? TIER_PRICES_ANNUAL_USD_6[newTier - 1] : TIER_PRICES_MONTHLY_USD_6[newTier - 1];
-        uint256 newDuration = newAnnual ? ANNUAL_PERIOD : MONTHLY_PERIOD;
-
-        uint8 oldTier = sub.tier;
-        if (newPrice > credit) {
-            uint256 delta = newPrice - credit;
-            usdc.safeTransferFrom(msg.sender, address(this), delta);
-            ownerFeeBalances[address(usdc)] += delta;
-        } else if (newPrice < credit) {
-            uint256 refund = credit - newPrice;
-            ownerFeeBalances[address(usdc)] -= refund;
-            usdc.safeTransfer(msg.sender, refund);
-        }
-
-        sub.tier = newTier;
-        sub.annual = newAnnual;
-        sub.expiresAt = block.timestamp + newDuration;
-        // The credit plus what the user paid now (or minus the refund) is the new tier's price.
-        subscriptionPayments[msg.sender] = SubscriptionPayment({paid: newPrice, startedAt: block.timestamp});
-
-        emit SepehrEvents.TierUpgraded(msg.sender, oldTier, newTier);
-        emit SepehrEvents.Subscribed(msg.sender, sub.expiresAt, newTier, newAnnual, block.chainid);
-    }
-
-    /// @inheritdoc ISepehrCore
-    /// @dev H25: on early cancellation we refund the pro-rata unused portion of what the user
-    /// paid for the current window (M-1), in USDC. Previously an `unsubscribe` simply deleted the record and the user
-    /// forfeited all prepaid time — equivalent to a silent penalty for cancelling. Refunds are
-    /// bounded by the outstanding `ownerFeeBalances[USDC]` so the protocol can never over-pay if
-    /// the treasury has already been drained via `withdrawOwnerFees`. Titan grants (tier 4) are
-    /// owner-gifted and therefore never refunded.
-    function unsubscribe() external override onlyExpectedChain nonReentrant {
-        Subscription storage sub = _subscriptions[msg.sender];
-        if (sub.tier == 0) revert SepehrErrors.SubscriptionNotFound();
-
-        uint256 refund = _unusedSubscriptionValue(msg.sender);
-        {
-            uint256 avail = ownerFeeBalances[address(usdc)];
-            if (refund > avail) refund = avail;
-            if (refund > 0) ownerFeeBalances[address(usdc)] -= refund;
-        }
-
-        delete _subscriptions[msg.sender];
-        delete subscriptionPayments[msg.sender];
-
-        _clearProtections(msg.sender);
-
-        if (refund > 0) {
-            usdc.safeTransfer(msg.sender, refund);
-        }
-        emit SepehrEvents.Unsubscribed(msg.sender);
+    /// @dev A18: a cancelled plan's protections are wiped so a later subscription starts from a
+    /// clean slate, and their snapshots return to the TVL budget.
+    function clearProtections(
+        address user
+    ) external override onlyExpectedChain {
+        if (msg.sender != address(subscriptions)) revert SepehrErrors.NotSubscriptions();
+        _clearProtections(user);
     }
 
     // ─── User: Position Protection ──────────────────────────────
@@ -488,10 +309,10 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         bytes32 protocolKey,
         uint256 thresholdHF,
         uint256 maxSlippageBps,
-        uint256 repayPercentBps
+        uint256 targetHF
     ) external override onlyExpectedChain whenNotPaused {
-        _requireActiveSubscription(msg.sender);
-        _validateProtectionParams(thresholdHF, maxSlippageBps, repayPercentBps);
+        ISepehrSubscriptions.Plan memory plan = _requireActiveSubscription(msg.sender);
+        _validateProtectionParams(thresholdHF, maxSlippageBps, targetHF);
 
         AdapterEntry storage entry = adapters[protocolKey];
         if (address(entry.adapter) == address(0)) revert SepehrErrors.AdapterNotRegistered(protocolKey);
@@ -519,7 +340,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         }
         // L-8 / M-2: the tier cap was only checked at trigger time, so a position above it was
         // accepted, counted against the TVL cap, and then never rescued.
-        _requireWithinTierCap(msg.sender, collateralUsd);
+        _requireWithinTierCap(collateralUsd, plan.maxCollateralUsd);
         uint256 newProtectedTotal = protectedCollateralUsd + collateralUsd;
         if (newProtectedTotal > tvlCapUsd) {
             revert SepehrErrors.TvlCapExceeded(newProtectedTotal, tvlCapUsd);
@@ -528,11 +349,11 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         protectionCollateralSnapshot[msg.sender][protocolKey] = collateralUsd;
 
         _protections[msg.sender][protocolKey] = PositionProtection({
-            enabled: true, thresholdHF: thresholdHF, maxSlippageBps: maxSlippageBps, repayPercentBps: repayPercentBps
+            enabled: true, thresholdHF: thresholdHF, maxSlippageBps: maxSlippageBps, targetHF: targetHF
         });
         _userProtocols[msg.sender].push(protocolKey);
 
-        emit SepehrEvents.ProtectionEnabled(msg.sender, protocolKey, thresholdHF, maxSlippageBps, repayPercentBps);
+        emit SepehrEvents.ProtectionEnabled(msg.sender, protocolKey, thresholdHF, maxSlippageBps, targetHF);
     }
 
     /// @inheritdoc ISepehrCore
@@ -553,6 +374,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             delete protectionCollateralSnapshot[msg.sender][protocolKey];
         }
         delete _protections[msg.sender][protocolKey];
+        delete _exitOrders[msg.sender][protocolKey];
         _removeUserProtocol(msg.sender, protocolKey);
         emit SepehrEvents.ProtectionDisabled(msg.sender, protocolKey);
     }
@@ -562,19 +384,19 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         bytes32 protocolKey,
         uint256 thresholdHF,
         uint256 maxSlippageBps,
-        uint256 repayPercentBps
+        uint256 targetHF
     ) external override onlyExpectedChain whenNotPaused {
         if (!_protections[msg.sender][protocolKey].enabled) {
             revert SepehrErrors.ProtectionNotEnabled(msg.sender, protocolKey);
         }
-        _validateProtectionParams(thresholdHF, maxSlippageBps, repayPercentBps);
+        _validateProtectionParams(thresholdHF, maxSlippageBps, targetHF);
 
         PositionProtection storage prot = _protections[msg.sender][protocolKey];
         prot.thresholdHF = thresholdHF;
         prot.maxSlippageBps = maxSlippageBps;
-        prot.repayPercentBps = repayPercentBps;
+        prot.targetHF = targetHF;
 
-        emit SepehrEvents.ProtectionUpdated(msg.sender, protocolKey, thresholdHF, maxSlippageBps, repayPercentBps);
+        emit SepehrEvents.ProtectionUpdated(msg.sender, protocolKey, thresholdHF, maxSlippageBps, targetHF);
     }
 
     /// @notice M-2: release the protections of a subscription that has expired or was
@@ -585,7 +407,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
     function releaseExpiredProtections(
         address user
     ) external onlyExpectedChain {
-        if (_subscriptions[user].expiresAt > block.timestamp) revert SepehrErrors.SubscriptionAlreadyActive();
+        if (subscriptions.planOf(user).expiresAt > block.timestamp) revert SepehrErrors.SubscriptionAlreadyActive();
         _clearProtections(user);
     }
 
@@ -622,24 +444,17 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         address[] calldata flashProviders,
         address dexRouter,
         bytes calldata dexRouteData
-    ) external override onlyExpectedChain nonReentrant whenNotPaused onlyKeeper {
-        _requireActiveSubscription(user);
+    ) external override onlyExpectedChain nonReentrant whenNotPaused returns (uint256 hfAfter) {
+        (ISepehrSubscriptions.Plan memory plan, PositionProtection storage prot, IProtocolAdapter adapter) =
+            _requireProtectedPosition(user, protocolKey, dexRouter);
 
-        PositionProtection storage prot = _protections[user][protocolKey];
-        if (!prot.enabled) revert SepehrErrors.ProtectionNotEnabled(user, protocolKey);
-
-        AdapterEntry storage entry = adapters[protocolKey];
-        if (address(entry.adapter) == address(0)) revert SepehrErrors.AdapterNotRegistered(protocolKey);
-        if (!entry.enabled) revert SepehrErrors.AdapterDisabled(protocolKey);
-
-        if (!entry.adapter.checkDelegation(user)) {
-            revert SepehrErrors.DelegationRevoked(user, protocolKey);
-        }
-
-        uint256 hfBefore = entry.adapter.getHealthFactor(user);
+        uint256 hfBefore = adapter.getHealthFactor(user);
         if (hfBefore >= prot.thresholdHF) {
             revert SepehrErrors.HealthFactorAboveThreshold(hfBefore, prot.thresholdHF);
         }
+        // Lot 6 (D4): with open execution on, anyone may rescue a position under
+        // `openExecutionHF`, the last resort when the keepers are down; it earns the keeper share.
+        if (!keepers[msg.sender] && hfBefore >= openExecutionHF) revert SepehrErrors.NotKeeper();
         // B15: reject implausibly-low pre-trigger HFs. An adapter returning an HF well below
         // the protocol's own liquidation threshold (1.0) is either stale or oracle-manipulated;
         // either way, the trigger fee extraction is illegitimate and must revert.
@@ -647,90 +462,83 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             revert SepehrErrors.ImplausibleHealthFactor(hfBefore, MIN_PLAUSIBLE_HF_WAD);
         }
 
-        // A16: per-(user, protocol) cooldown. A user with multi-protocol exposure (Aave +
-        // Compound + Morpho) is protected independently on each: a trigger on one protocol
-        // no longer locks the others for an hour, which would otherwise let an adversary
-        // freeze protection on the "critical" position by manipulating a low-stakes one first.
-        // H-2: the cooldown no longer blocks a market that keeps falling. Once the health
-        // factor drops `RETRIGGER_HF_DROP_BPS` below what the last trigger left, the position
-        // can be rescued again.
-        {
-            uint256 timeSinceLast = block.timestamp - lastTriggerTime[user][protocolKey];
-            if (timeSinceLast < COOLDOWN_SECONDS) {
-                uint256 retriggerBelow = Percentages.applyBps(
-                    lastTriggerHealthFactor[user][protocolKey], Percentages.BPS_DENOMINATOR - RETRIGGER_HF_DROP_BPS
-                );
-                if (hfBefore >= retriggerBelow) {
-                    revert SepehrErrors.CooldownActive(COOLDOWN_SECONDS - timeSinceLast);
-                }
-            }
-        }
-
-        // H01: enforce the tier's collateral-value cap at the moment of execution. Checking
-        // only at subscription would let a user grow their position after subscribing and
-        // receive protection beyond what their tier economically justifies. Titan (tier 4) has
-        // an unbounded cap (type(uint256).max) and is skipped.
-        if (TIER_MAX_COLLATERAL_USD_8[_subscriptions[user].tier - 1] != type(uint256).max) {
-            _requireWithinTierCap(user, entry.adapter.getCollateralValueUsd(user));
-        }
+        // No cooldown between rescues: a rescue lands at most `TARGET_TOLERANCE` above the target,
+        // itself at least `MIN_TARGET_GAP` above the threshold, so another one needs the health
+        // factor to fall back under the threshold, which is when the position needs it. A rescue
+        // the repay cap stopped short of the target leaves the position under its threshold, and
+        // the next one may follow at once.
 
         if (repayAmount == 0) revert SepehrErrors.ZeroAmount();
 
-        // H02: enforce the user's `repayPercentBps` limit. The user constrains how much of their
-        // outstanding debt Sepehr may close in a single trigger (e.g. "never touch more than
-        // 25% at once"), which protects them from a keeper that over-repays and drains their
-        // position. M-6: every adapter's `getDebt` returns 0 only when the user owes nothing in
-        // `debtAsset`, so 0 now reverts; it used to skip the limit, which let a keeper "repay"
-        // Compound in a collateral asset with no bound.
+        // H02: one rescue repays at most `MAX_REPAY_BPS` of the debt, whatever the target asks
+        // for: a deep fall is recovered over several rescues, each checked again. M-6: every
+        // adapter's `getDebt` returns 0 only when the user owes nothing in `debtAsset`, so 0
+        // reverts; it used to skip the limit, which let a keeper "repay" Compound in a collateral
+        // asset with no bound.
         {
-            uint256 userDebt = entry.adapter.getDebt(user, debtAsset);
+            uint256 userDebt = adapter.getDebt(user, debtAsset);
             if (userDebt == 0) revert SepehrErrors.NoDebtToRepay(user, debtAsset);
-            uint256 allowed = (userDebt * prot.repayPercentBps) / 10_000;
+            uint256 allowed = (userDebt * MAX_REPAY_BPS) / Percentages.BPS_DENOMINATOR;
             if (repayAmount > allowed) {
-                revert SepehrErrors.RepayExceedsUserLimit(repayAmount, allowed);
+                revert SepehrErrors.MaxRepayExceeded(repayAmount, allowed);
             }
         }
 
-        if (!allowedDexRouters[dexRouter]) revert SepehrErrors.NotAuthorized();
-
-        lastTriggerTime[user][protocolKey] = block.timestamp;
-
-        uint256 userFeeBps = TIER_FEE_BPS[_subscriptions[user].tier - 1];
-        bytes memory callbackData = abi.encode(
-            user,
-            protocolKey,
-            debtAsset,
-            collateralAsset,
-            repayAmount,
-            dexRouter,
-            dexRouteData,
-            prot.maxSlippageBps,
-            userFeeBps
-        );
-
-        // H28: bind the callback session not just to the payload hash but also to the asset and
-        // amount the flash-loan provider is expected to deliver. A malicious whitelisted provider
-        // that tried to invoke onFlashLoan with a different asset/amount than execute() requested
-        // would fail the equality check below.
-        _activeSessionHash = keccak256(abi.encode(keccak256(callbackData), debtAsset, repayAmount));
-        _borrowFlashLoan(flashProviders, debtAsset, repayAmount, callbackData);
-        _activeSessionHash = bytes32(0);
-        uint256 collateralWithdrawn = _collateralWithdrawn;
-        _collateralWithdrawn = 0;
+        uint256 totalFee = Percentages.applyBps(repayAmount, plan.feeBps);
+        // Lot 6: the debt asset the user lets the core take (allowance, within their balance)
+        // repays first, each unit with its fee at the plan's rate; a flash loan backed by the
+        // collateral covers the rest, and none is needed when the wallet covers it all.
+        uint256 walletRepay = _walletRepay(user, debtAsset, repayAmount, plan.feeBps);
+        uint256 walletFee = Percentages.applyBps(walletRepay, plan.feeBps);
+        if (walletRepay != 0) {
+            IERC20(debtAsset).safeTransferFrom(user, address(this), walletRepay + walletFee);
+            emit SepehrEvents.RepaidFromWallet(user, protocolKey, debtAsset, walletRepay, walletFee);
+        }
+        uint256 collateralWithdrawn;
+        if (walletRepay == repayAmount) {
+            _repayFromWallet(adapter, user, debtAsset, repayAmount, totalFee);
+        } else {
+            bytes memory callbackData = abi.encode(
+                user,
+                protocolKey,
+                debtAsset,
+                collateralAsset,
+                repayAmount,
+                walletFee,
+                dexRouter,
+                dexRouteData,
+                prot.maxSlippageBps,
+                totalFee - walletFee,
+                uint256(0)
+            );
+            uint256 flashAmount = repayAmount - walletRepay;
+            // H28: bind the callback session not just to the payload hash but also to the asset
+            // and amount the flash-loan provider is expected to deliver. A malicious whitelisted
+            // provider that tried to invoke onFlashLoan with a different asset/amount than
+            // execute() requested would fail the equality check below.
+            _activeSessionHash = keccak256(abi.encode(keccak256(callbackData), debtAsset, flashAmount));
+            _borrowFlashLoan(flashProviders, debtAsset, flashAmount, callbackData);
+            _activeSessionHash = bytes32(0);
+            collateralWithdrawn = _collateralWithdrawn;
+            _collateralWithdrawn = 0;
+        }
 
         // H-2: a trigger only has to improve the health factor. Requiring it to clear the
-        // threshold blocked every rescue once a fast drop pushed the position further than the
-        // user's repay share could recover, which is when protection matters most.
+        // threshold, or the target, blocked every rescue once a fast drop pushed the position
+        // further than one rescue could recover, which is when protection matters most.
         // H09: require strict HF improvement. A trigger that leaves HF unchanged (or regressed
         // due to a stale adapter price cache) is ineffective, and charging fees for a no-op would
         // constitute unjust enrichment of keeper + owner at the user's expense.
-        uint256 hfAfter = entry.adapter.getHealthFactor(user);
+        hfAfter = adapter.getHealthFactor(user);
         if (hfAfter <= hfBefore) {
             revert SepehrErrors.HealthFactorNotImproved(hfBefore, hfAfter);
         }
-        lastTriggerHealthFactor[user][protocolKey] = hfAfter;
+        // The upper bound is the user's: the keeper earns a share of a fee proportional to the
+        // amount repaid, and must not unwind more of the position than the target asks for.
+        if (hfAfter > prot.targetHF + TARGET_TOLERANCE) {
+            revert SepehrErrors.RescueOvershootsTarget(hfAfter, prot.targetHF + TARGET_TOLERANCE);
+        }
 
-        uint256 totalFee = Percentages.applyBps(repayAmount, userFeeBps);
         (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(totalFee);
 
         // Fees accrue in the debt asset of this trigger. Per-asset accounting is required because
@@ -743,6 +551,88 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             user, protocolKey, msg.sender, repayAmount, collateralWithdrawn, hfBefore, hfAfter, totalFee
         );
         emit SepehrEvents.FeeCollected(msg.sender, debtAsset, totalFee, ownerShare, keeperShare);
+    }
+
+    // ─── Stop-loss and take-profit (lot 6) ───────────────────────
+
+    /// @inheritdoc ISepehrCore
+    function setExitOrder(
+        bytes32 protocolKey,
+        address priceAsset,
+        uint256 stopLossUsd,
+        uint256 takeProfitUsd
+    ) external override onlyExpectedChain whenNotPaused {
+        if (!_protections[msg.sender][protocolKey].enabled) {
+            revert SepehrErrors.ProtectionNotEnabled(msg.sender, protocolKey);
+        }
+        if (stopLossUsd == 0 && takeProfitUsd == 0) {
+            priceAsset = address(0);
+        } else {
+            if (address(assetOracles[priceAsset].aggregator) == address(0)) {
+                revert SepehrErrors.MissingAssetOracle(priceAsset);
+            }
+            if (stopLossUsd != 0 && takeProfitUsd != 0 && stopLossUsd >= takeProfitUsd) {
+                revert SepehrErrors.InvalidExitOrder(stopLossUsd, takeProfitUsd);
+            }
+        }
+        _exitOrders[msg.sender][protocolKey] = ExitOrder(priceAsset, stopLossUsd, takeProfitUsd);
+        emit SepehrEvents.ExitOrderSet(msg.sender, protocolKey, priceAsset, stopLossUsd, takeProfitUsd);
+    }
+
+    /// @inheritdoc ISepehrCore
+    /// @dev The whole debt in `debtAsset` is repaid with a flash loan; `collateralAmount` of
+    /// `collateralAsset` is withdrawn and sold, under the oracle floor a rescue uses, and what
+    /// the sale leaves after the flash loan and the fee goes to the user. The order is spent.
+    function close(
+        address user,
+        bytes32 protocolKey,
+        address debtAsset,
+        address collateralAsset,
+        uint256 collateralAmount,
+        address[] calldata flashProviders,
+        address dexRouter,
+        bytes calldata dexRouteData
+    ) external override onlyExpectedChain nonReentrant whenNotPaused onlyKeeper {
+        (ISepehrSubscriptions.Plan memory plan, PositionProtection storage prot, IProtocolAdapter adapter) =
+            _requireProtectedPosition(user, protocolKey, dexRouter);
+        if (collateralAmount == 0) revert SepehrErrors.ZeroAmount();
+
+        ExitOrder memory order = _exitOrders[user][protocolKey];
+        if (order.priceAsset == address(0)) revert SepehrErrors.NoExitOrder(user, protocolKey);
+        uint256 price = _readOraclePrice(order.priceAsset, assetOracles[order.priceAsset]);
+        bool stopped = order.stopLossUsd != 0 && price <= order.stopLossUsd;
+        if (!stopped && (order.takeProfitUsd == 0 || price < order.takeProfitUsd)) {
+            revert SepehrErrors.ExitConditionNotMet(price);
+        }
+
+        uint256 debt = adapter.getDebt(user, debtAsset);
+        if (debt == 0) revert SepehrErrors.NoDebtToRepay(user, debtAsset);
+        uint256 fee = Percentages.applyBps(debt, plan.feeBps);
+        delete _exitOrders[user][protocolKey];
+
+        bytes memory callbackData = abi.encode(
+            user,
+            protocolKey,
+            debtAsset,
+            collateralAsset,
+            debt,
+            uint256(0),
+            dexRouter,
+            dexRouteData,
+            prot.maxSlippageBps,
+            fee,
+            collateralAmount
+        );
+        _activeSessionHash = keccak256(abi.encode(keccak256(callbackData), debtAsset, debt));
+        _borrowFlashLoan(flashProviders, debtAsset, debt, callbackData);
+        _activeSessionHash = bytes32(0);
+        _collateralWithdrawn = 0;
+
+        (uint256 ownerShare, uint256 keeperShare) = Percentages.splitFee(fee);
+        ownerFeeBalances[debtAsset] += ownerShare;
+        keeperFeeBalances[msg.sender][debtAsset] += keeperShare;
+        emit SepehrEvents.PositionClosed(user, protocolKey, msg.sender, debt, collateralAmount, price, fee);
+        emit SepehrEvents.FeeCollected(msg.sender, debtAsset, fee, ownerShare, keeperShare);
     }
 
     // ─── Flash Loan Callback ─────────────────────────────────────
@@ -776,40 +666,46 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             address debtAsset,
             address collateralAsset,
             uint256 repayAmount,
+            uint256 walletFee,
             address dexRouter,
             bytes memory dexRouteData,
             uint256 maxSlippageBps,
-            uint256 triggerFeeBps
-        ) = abi.decode(data, (address, bytes32, address, address, uint256, address, bytes, uint256, uint256));
+            uint256 collateralFee,
+            uint256 collateralNeeded
+        ) = abi.decode(
+            data, (address, bytes32, address, address, uint256, uint256, address, bytes, uint256, uint256, uint256)
+        );
 
         IProtocolAdapter adapter = adapters[protocolKey].adapter;
 
-        // H-3 / L-2: balances the core held before this trigger (the provider already sent
-        // `amount`). The trigger keeps the flash-loan repayment and the fee `execute` credits;
-        // everything else it ends up holding goes back to the user.
-        uint256 debtHeld = IERC20(debtAsset).balanceOf(address(this)) - amount;
+        // H-3 / L-2: balances the core held before this trigger (the provider sent `amount`, the
+        // wallet the rest of `repayAmount` and its fee). The trigger keeps the flash-loan
+        // repayment and the fee `execute` credits; everything else goes back to the user.
+        uint256 debtHeld = IERC20(debtAsset).balanceOf(address(this)) - repayAmount - walletFee;
         uint256 collateralHeld = collateralAsset == debtAsset ? 0 : IERC20(collateralAsset).balanceOf(address(this));
 
         IERC20(debtAsset).safeTransfer(address(adapter), repayAmount);
         adapter.repay(user, debtAsset, repayAmount);
 
-        // C1: `requiredDebtOut` is the amount of debt-asset the contract must hold after the
-        // optional swap — enough to repay the flash loan (`repayAmount + fee`) and to fund the
-        // `totalFee` that execute() credits to owner + keeper balances, with the same rounding.
-        uint256 requiredDebtOut = repayAmount + fee + Percentages.applyBps(repayAmount, triggerFeeBps);
+        // C1: `requiredDebtOut` is the amount of debt-asset the collateral must raise — enough to
+        // repay the flash loan (`amount + fee`) and the part of the trigger fee the wallet did
+        // not pay (`collateralFee`), with the same rounding as execute().
+        uint256 requiredDebtOut = amount + fee + collateralFee;
 
-        uint256 collateralNeeded;
-        if (collateralAsset == debtAsset) {
-            // Homogeneous case: collateral == debt, no swap needed. Withdraw exactly the
-            // required output; the part over (amount+fee) funds trigger-fee accrual.
-            collateralNeeded = requiredDebtOut;
-        } else {
-            // C1: cross-asset — reverse-project `requiredDebtOut` through the Chainlink oracle
-            // pair, adding a `maxSlippageBps` buffer, so that even a worst-case swap still
-            // produces at least `requiredDebtOut` of debt asset. The prior implementation used
-            // `repayAmount + fee + triggerFee` in debt-asset units as the collateral amount,
-            // which conflated denominations and either stole user collateral or under-withdrew.
-            collateralNeeded = _collateralToCover(collateralAsset, debtAsset, requiredDebtOut, maxSlippageBps);
+        // A close names the collateral to sell, all of it (lot 6); a rescue sells what it needs.
+        if (collateralNeeded == 0) {
+            if (collateralAsset == debtAsset) {
+                // Homogeneous case: collateral == debt, no swap needed. Withdraw exactly the
+                // required output; the part over (amount+fee) funds trigger-fee accrual.
+                collateralNeeded = requiredDebtOut;
+            } else {
+                // C1: cross-asset — reverse-project `requiredDebtOut` through the Chainlink oracle
+                // pair, adding a `maxSlippageBps` buffer, so that even a worst-case swap still
+                // produces at least `requiredDebtOut` of debt asset. The prior implementation used
+                // `repayAmount + fee + triggerFee` in debt-asset units as the collateral amount,
+                // which conflated denominations and either stole user collateral or under-withdrew.
+                collateralNeeded = _collateralToCover(collateralAsset, debtAsset, requiredDebtOut, maxSlippageBps);
+            }
         }
 
         adapter.withdrawCollateral(user, collateralAsset, collateralNeeded, address(this));
@@ -856,7 +752,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
         // H-3: unused slippage headroom (and any repay surplus an adapter swept back) used to be
         // credited to the owner. It goes back to the user; the core keeps exactly what it owes.
-        uint256 owed = amount + fee + Percentages.applyBps(repayAmount, triggerFeeBps);
+        uint256 owed = amount + fee + collateralFee + walletFee;
         uint256 available = IERC20(debtAsset).balanceOf(address(this)) - debtHeld;
         if (available < owed) revert SepehrErrors.InsufficientRescueProceeds(available, owed);
         _returnSurplus(user, debtAsset, available - owed);
@@ -1021,75 +917,6 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.KeeperRemoved(keeper);
     }
 
-    /// @notice Update the trigger fee (in basis points) charged to subscribers of a given tier.
-    /// @dev Timelock-gated because fees directly affect economics for all existing subscribers;
-    /// changes should go through governance and announcement before taking effect. A8: bounded
-    /// by `MAX_TIER_FEE_BPS` (1%) so even a rushed/malicious proposal cannot seize user
-    /// collateral via a 99% fee — anything above that requires a contract migration.
-    /// @param tier Tier index in [1, 4]; reverts otherwise.
-    /// @param newBps Replacement fee in basis points applied to the repaid amount; must be
-    /// ≤ `MAX_TIER_FEE_BPS`.
-    function setTierFeeBps(
-        uint8 tier,
-        uint256 newBps
-    ) external onlyExpectedChain onlyTimelock {
-        if (tier == 0 || tier > 4) revert SepehrErrors.InvalidTier();
-        if (newBps > MAX_TIER_FEE_BPS) {
-            revert SepehrErrors.TierFeeBpsTooHigh(newBps, MAX_TIER_FEE_BPS);
-        }
-        uint256 old = TIER_FEE_BPS[tier - 1];
-        TIER_FEE_BPS[tier - 1] = newBps;
-        emit SepehrEvents.TierFeeBpsUpdated(tier, old, newBps);
-    }
-
-    /// @notice Update the USDC-6 price of a tier for either the monthly or annual schedule.
-    /// @dev Timelock-gated. A13: tier prices were previously immutable, leaving the protocol
-    /// unable to respond to a USDC depeg or genuine cost change. Each call is bounded by
-    /// `MAX_TIER_PRICE_DEVIATION_BPS` (±50%) so a pathological move requires multiple 48h-delayed
-    /// proposals. Tier 4 (Titan) is owner-granted, not priced, so only tiers 1–3 are mutable.
-    /// M-1: `unsubscribe` and `upgradeTier` pro-rate what the user paid for the current window,
-    /// so a price change never alters the refund or credit of a subscription already paid.
-    /// @param tier Tier index in [1, 3]; reverts on 0 or ≥4.
-    /// @param annual `true` to update the annual price, `false` for monthly.
-    /// @param newPrice Replacement price in USDC-6 units; must be within
-    /// `[oldPrice * (10_000 - MAX_TIER_PRICE_DEVIATION_BPS)/10_000,
-    ///   oldPrice * (10_000 + MAX_TIER_PRICE_DEVIATION_BPS)/10_000]`.
-    function setTierPrice(
-        uint8 tier,
-        bool annual,
-        uint256 newPrice
-    ) external onlyExpectedChain onlyTimelock {
-        if (tier == 0 || tier >= 4) revert SepehrErrors.InvalidTier();
-        if (newPrice == 0) revert SepehrErrors.ZeroAmount();
-
-        // M1: enforce a minimum interval between successive changes for this (tier, annual) key.
-        // Without the cooldown, two back-to-back 50% cuts inside one 96h window (two timelock
-        // cycles) could compound to a 75% drop and retro-harm prepaid annual subscribers. The
-        // check is skipped for the first-ever call (lastUpdate == 0) so deployment-time
-        // parameter adjustments remain possible.
-        uint256 lastUpdate = tierPriceLastUpdatedAt[tier][annual];
-        if (lastUpdate != 0) {
-            uint256 nextAllowed = lastUpdate + TIER_PRICE_UPDATE_COOLDOWN;
-            if (block.timestamp < nextAllowed) {
-                revert SepehrErrors.TierPriceCooldown(lastUpdate, nextAllowed);
-            }
-        }
-
-        uint256 old = annual ? TIER_PRICES_ANNUAL_USD_6[tier - 1] : TIER_PRICES_MONTHLY_USD_6[tier - 1];
-        uint256 minAllowed = (old * (10_000 - MAX_TIER_PRICE_DEVIATION_BPS)) / 10_000;
-        uint256 maxAllowed = (old * (10_000 + MAX_TIER_PRICE_DEVIATION_BPS)) / 10_000;
-        if (newPrice < minAllowed || newPrice > maxAllowed) {
-            revert SepehrErrors.TierPriceDeviationTooLarge(old, newPrice);
-        }
-        if (annual) {
-            TIER_PRICES_ANNUAL_USD_6[tier - 1] = newPrice;
-        } else {
-            TIER_PRICES_MONTHLY_USD_6[tier - 1] = newPrice;
-        }
-        tierPriceLastUpdatedAt[tier][annual] = block.timestamp;
-        emit SepehrEvents.TierPriceUpdated(tier, annual, old, newPrice);
-    }
-
     /// @notice Update the minimum USD-8 collateral required to enable protection.
     /// @dev Timelock-gated. Setting to 0 disables the gate entirely (useful for dev/test or
     /// emergency relief). A7: previously dead state; now enforced in `enableProtection`.
@@ -1115,34 +942,6 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         uint256 old = tvlCapUsd;
         tvlCapUsd = newCap;
         emit SepehrEvents.TvlCapUpdated(old, newCap);
-    }
-
-    /// @notice Grant a Titan (tier 4) subscription free of charge.
-    /// @dev Owner-only (not timelock) so strategic partners, audits, or bounty recipients can be
-    /// onboarded reactively. Cannot be self-subscribed through `subscribe`.
-    /// @param user Recipient of the Titan subscription.
-    /// @param durationSeconds Length of the subscription starting from now.
-    function grantTitanSubscription(
-        address user,
-        uint256 durationSeconds
-    ) external onlyExpectedChain {
-        if (msg.sender != owner()) revert SepehrErrors.NotOwner();
-        if (user == address(0)) revert SepehrErrors.ZeroAddress();
-        if (durationSeconds == 0) revert SepehrErrors.ZeroAmount();
-
-        // Refuse to overwrite an active paid subscription. A Titan grant could otherwise wipe a
-        // still-valid Shield/Guardian/Watchtower period without refund (owner griefing risk), or
-        // even silently extend a compromised account's cap. The user must first `unsubscribe`
-        // if they want to move off a paid plan onto a Titan grant.
-        Subscription storage existing = _subscriptions[user];
-        if (existing.tier != 0 && existing.tier != 4 && existing.expiresAt > block.timestamp) {
-            revert SepehrErrors.SubscriptionAlreadyActive();
-        }
-
-        _subscriptions[user] = Subscription({tier: 4, annual: false, expiresAt: block.timestamp + durationSeconds});
-        delete subscriptionPayments[user];
-
-        emit SepehrEvents.TitanSubscriptionGranted(user, block.timestamp + durationSeconds);
     }
 
     /// @notice Whitelist a flash loan provider for use during trigger execution.
@@ -1472,14 +1271,30 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         emit SepehrEvents.PauseGuardianUpdated(old, newGuardian);
     }
 
-    // ─── Views ───────────────────────────────────────────────────
-
-    /// @inheritdoc ISepehrCore
-    function getSubscription(
-        address user
-    ) external view override onlyExpectedChain returns (Subscription memory) {
-        return _subscriptions[user];
+    /// @notice Turn open execution on (a health factor under `MIN_HF_THRESHOLD`) or off (0).
+    /// @dev The last resort when every keeper is down: the rescue keeps all its on-chain checks,
+    /// and its caller earns the keeper share. Below the lowest threshold, so the keepers act first.
+    /// @param hf The health factor under which anyone may rescue, WAD.
+    function setOpenExecutionHF(
+        uint256 hf
+    ) external onlyExpectedChain onlyTimelock {
+        if (hf >= MIN_HF_THRESHOLD) revert SepehrErrors.OpenExecutionHFTooHigh(hf, MIN_HF_THRESHOLD);
+        emit SepehrEvents.OpenExecutionHFUpdated(openExecutionHF, hf);
+        openExecutionHF = hf;
     }
+
+    /// @notice Hand governance to another timelock (a multisig-driven one, for instance).
+    /// @dev Called by the current timelock, so the change waits out its delay in public.
+    /// @param newTimelock The new sole caller of the timelock-gated setters.
+    function setTimelock(
+        address newTimelock
+    ) external onlyExpectedChain onlyTimelock {
+        if (newTimelock == address(0)) revert SepehrErrors.ZeroAddress();
+        emit SepehrEvents.TimelockUpdated(timelock, newTimelock);
+        timelock = newTimelock;
+    }
+
+    // ─── Views ───────────────────────────────────────────────────
 
     /// @inheritdoc ISepehrCore
     function getProtection(
@@ -1487,6 +1302,14 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         bytes32 protocolKey
     ) external view override onlyExpectedChain returns (PositionProtection memory) {
         return _protections[user][protocolKey];
+    }
+
+    /// @inheritdoc ISepehrCore
+    function getExitOrder(
+        address user,
+        bytes32 protocolKey
+    ) external view override onlyExpectedChain returns (ExitOrder memory) {
+        return _exitOrders[user][protocolKey];
     }
 
     /// @inheritdoc ISepehrCore
@@ -1505,35 +1328,42 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         return _userProtocols[user];
     }
 
-    /// @notice A22: return every tier's fee bps in a single call so off-chain consumers
-    /// don't have to issue four separate indexed reads on `TIER_FEE_BPS`.
-    function getTierFeeBps() external view returns (uint256[4] memory) {
-        return TIER_FEE_BPS;
-    }
-
-    /// @notice A22: return every tier's monthly USDC price (6 decimals) in one call.
-    function getTierPricesMonthly() external view returns (uint256[3] memory) {
-        return TIER_PRICES_MONTHLY_USD_6;
-    }
-
-    /// @notice A22: return every tier's annual USDC price (6 decimals) in one call.
-    function getTierPricesAnnual() external view returns (uint256[3] memory) {
-        return TIER_PRICES_ANNUAL_USD_6;
-    }
-
-    /// @notice A22: return every tier's collateral cap (USD-8) in one call.
-    function getTierMaxCollateralUsd() external view returns (uint256[4] memory) {
-        return TIER_MAX_COLLATERAL_USD_8;
-    }
-
     // ─── Internal ────────────────────────────────────────────────
 
+    /// @dev The user's plan, read from SepehrSubscriptions; reverts without an active one.
     function _requireActiveSubscription(
         address user
-    ) internal view {
-        Subscription storage sub = _subscriptions[user];
-        if (sub.tier == 0) revert SepehrErrors.SubscriptionNotFound();
-        if (sub.expiresAt <= block.timestamp) revert SepehrErrors.SubscriptionExpired();
+    ) internal view returns (ISepehrSubscriptions.Plan memory plan) {
+        plan = subscriptions.planOf(user);
+        if (plan.tier == 0) revert SepehrErrors.SubscriptionNotFound();
+        if (plan.expiresAt <= block.timestamp) revert SepehrErrors.SubscriptionExpired();
+    }
+
+    /// @dev What a rescue and a close both require: an active plan, the protection on, the adapter
+    /// registered and enabled, the delegation in place, a whitelisted DEX router, and (H01) the
+    /// collateral within the plan's cap at execution time, so a position grown after subscribing
+    /// gets no protection beyond what its tier pays for. Titan's cap is unbounded.
+    function _requireProtectedPosition(
+        address user,
+        bytes32 protocolKey,
+        address dexRouter
+    )
+        private
+        view
+        returns (ISepehrSubscriptions.Plan memory plan, PositionProtection storage prot, IProtocolAdapter adapter)
+    {
+        plan = _requireActiveSubscription(user);
+        prot = _protections[user][protocolKey];
+        if (!prot.enabled) revert SepehrErrors.ProtectionNotEnabled(user, protocolKey);
+        AdapterEntry storage entry = adapters[protocolKey];
+        adapter = entry.adapter;
+        if (address(adapter) == address(0)) revert SepehrErrors.AdapterNotRegistered(protocolKey);
+        if (!entry.enabled) revert SepehrErrors.AdapterDisabled(protocolKey);
+        if (!adapter.checkDelegation(user)) revert SepehrErrors.DelegationRevoked(user, protocolKey);
+        if (!allowedDexRouters[dexRouter]) revert SepehrErrors.NotAuthorized();
+        if (plan.maxCollateralUsd != type(uint256).max) {
+            _requireWithinTierCap(adapter.getCollateralValueUsd(user), plan.maxCollateralUsd);
+        }
     }
 
     /// @notice A18: wipe every protection of `user` so a later re-subscribe does not silently
@@ -1550,6 +1380,7 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
             capRefund += protectionCollateralSnapshot[user][key];
             delete protectionCollateralSnapshot[user][key];
             delete _protections[user][key];
+            delete _exitOrders[user][key];
         }
         if (capRefund != 0) {
             protectedCollateralUsd -= capRefund;
@@ -1562,41 +1393,61 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
     /// @notice H01 / L-8: `collateralUsd` must fit the user's tier cap (Titan is unlimited).
     function _requireWithinTierCap(
-        address user,
-        uint256 collateralUsd
-    ) internal view {
-        uint256 tierCap = TIER_MAX_COLLATERAL_USD_8[_subscriptions[user].tier - 1];
+        uint256 collateralUsd,
+        uint256 tierCap
+    ) internal pure {
         if (collateralUsd > tierCap) revert SepehrErrors.TierCollateralCapExceeded(collateralUsd, tierCap);
-    }
-
-    /// @notice M-1: the unused part of what `user` paid for the current window, pro-rated by
-    /// time. Zero for Titan grants (never paid) and for an expired subscription.
-    function _unusedSubscriptionValue(
-        address user
-    ) internal view returns (uint256) {
-        Subscription storage sub = _subscriptions[user];
-        if (sub.tier == 4 || sub.expiresAt <= block.timestamp) return 0;
-        SubscriptionPayment storage payment = subscriptionPayments[user];
-        return (payment.paid * (sub.expiresAt - block.timestamp)) / (sub.expiresAt - payment.startedAt);
     }
 
     function _validateProtectionParams(
         uint256 thresholdHF,
         uint256 maxSlippageBps,
-        uint256 repayPercentBps
+        uint256 targetHF
     ) internal pure {
         if (thresholdHF < MIN_HF_THRESHOLD) {
             revert SepehrErrors.ThresholdTooLow(thresholdHF, MIN_HF_THRESHOLD);
         }
-        if (repayPercentBps > MAX_REPAY_BPS) {
-            revert SepehrErrors.RepayPercentTooHigh(repayPercentBps, MAX_REPAY_BPS);
+        if (targetHF < thresholdHF + MIN_TARGET_GAP) {
+            revert SepehrErrors.TargetTooLow(targetHF, thresholdHF + MIN_TARGET_GAP);
         }
-        if (repayPercentBps < MIN_REPAY_BPS) {
-            revert SepehrErrors.RepayPercentTooLow(repayPercentBps, MIN_REPAY_BPS);
+        if (targetHF > MAX_TARGET_HF) {
+            revert SepehrErrors.TargetTooHigh(targetHF, MAX_TARGET_HF);
         }
         if (maxSlippageBps > MAX_SLIPPAGE_BPS) {
             revert SepehrErrors.InvalidSlippage(maxSlippageBps);
         }
+    }
+
+    /// @dev Lot 6: the part of `repayAmount` the user's wallet covers, each unit with its fee at
+    /// `feeBps`, within what they let the core take (allowance) and what they hold.
+    function _walletRepay(
+        address user,
+        address asset,
+        uint256 repayAmount,
+        uint256 feeBps
+    ) private view returns (uint256 walletRepay) {
+        uint256 available = IERC20(asset).allowance(user, address(this));
+        if (available == 0) return 0;
+        uint256 balance = IERC20(asset).balanceOf(user);
+        if (balance < available) available = balance;
+        walletRepay = Math.mulDiv(available, Percentages.BPS_DENOMINATOR, Percentages.BPS_DENOMINATOR + feeBps);
+        if (walletRepay > repayAmount) walletRepay = repayAmount;
+    }
+
+    /// @dev Lot 6: a rescue the wallet covers in full, `repayAmount` and `totalFee` already
+    /// pulled: the debt is repaid without a flash loan or a sale, and what the adapter did not
+    /// use goes back to the user.
+    function _repayFromWallet(
+        IProtocolAdapter adapter,
+        address user,
+        address debtAsset,
+        uint256 repayAmount,
+        uint256 totalFee
+    ) private {
+        uint256 debtHeld = IERC20(debtAsset).balanceOf(address(this)) - repayAmount - totalFee;
+        IERC20(debtAsset).safeTransfer(address(adapter), repayAmount);
+        adapter.repay(user, debtAsset, repayAmount);
+        _returnSurplus(user, debtAsset, IERC20(debtAsset).balanceOf(address(this)) - debtHeld - totalFee);
     }
 
     /// @dev L-1: when every attempted provider reverts, the last provider's revert data is

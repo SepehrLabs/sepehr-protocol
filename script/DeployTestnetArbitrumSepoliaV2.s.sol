@@ -5,6 +5,7 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
 import {Script, console} from "forge-std/Script.sol";
 
 import {SepehrCore} from "../src/SepehrCore.sol";
+import {SepehrSubscriptions} from "../src/SepehrSubscriptions.sol";
 import {AaveV3Adapter} from "../src/adapters/AaveV3Adapter.sol";
 import {UniswapV3Router} from "../src/dex/UniswapV3Router.sol";
 import {AaveFlashLoanProvider} from "../src/flash/AaveFlashLoanProvider.sol";
@@ -14,8 +15,9 @@ import {MockChainlinkAggregator} from "../test/helpers/MockChainlinkAggregator.s
 /// @notice Bloc 5.1 testnet dry-run on Arbitrum Sepolia (chainId
 ///         421614) with a **5-minute timelock delay**. Splits the old
 ///         schedule+execute flow in two: this script only *schedules*
-///         the admin ops; `ExecuteTestnetTimelockV2.s.sol` runs after
-///         the delay elapses.
+///         the five admin ops on the core; `ExecuteTestnetTimelockV2.s.sol`
+///         runs after the delay elapses. The testnet charges the mainnet
+///         plan prices.
 ///
 ///         Uses OZ `TimelockController` directly with `minDelay = 300`
 ///         because `SepehrTimelock.MIN_DELAY = 48 hours` is hardcoded
@@ -25,7 +27,7 @@ import {MockChainlinkAggregator} from "../test/helpers/MockChainlinkAggregator.s
 ///
 /// Required env:
 ///   DEPLOYER_ADDRESS, SEPEHR_OWNER, SEPEHR_PAUSE_GUARDIAN,
-///   KEEPER_ADDRESS, USDC_ADDRESS, AAVE_POOL, AAVE_ATOKEN,
+///   KEEPER_ADDRESS, USDC_ADDRESS, AAVE_POOL,
 ///   PROTOCOL_KEY_AAVE, UNIV3_SWAP_ROUTER, UNIV3_FACTORY
 ///
 /// Optional env (carried over from V1):
@@ -57,7 +59,6 @@ contract DeployTestnetArbitrumSepoliaV2 is Script {
         address pauseGuardian = vm.envAddress("SEPEHR_PAUSE_GUARDIAN");
         address usdc = vm.envAddress("USDC_ADDRESS");
         address aavePool = vm.envAddress("AAVE_POOL");
-        address aToken = vm.envAddress("AAVE_ATOKEN");
         address keeper = vm.envAddress("KEEPER_ADDRESS");
         bytes32 aaveKey = vm.envBytes32("PROTOCOL_KEY_AAVE");
         address uniV3SwapRouter = vm.envAddress("UNIV3_SWAP_ROUTER");
@@ -78,11 +79,17 @@ contract DeployTestnetArbitrumSepoliaV2 is Script {
         TimelockController timelock = new TimelockController(TESTNET_TIMELOCK_DELAY, proposers, executors, address(0));
         console.log("TIMELOCK", address(timelock));
 
-        SepehrCore core =
-            new SepehrCore(owner, address(timelock), pauseGuardian, usdc, minCollateralUsd, tvlCapUsd, block.chainid);
+        // SepehrSubscriptions names the core deployed right after it; the core checks it.
+        SepehrSubscriptions subscriptions = new SepehrSubscriptions(
+            owner, address(timelock), usdc, block.chainid, vm.computeCreateAddress(deployer, vm.getNonce(deployer) + 1)
+        );
+        console.log("SUBSCRIPTIONS", address(subscriptions));
+        SepehrCore core = new SepehrCore(
+            owner, address(timelock), pauseGuardian, address(subscriptions), minCollateralUsd, tvlCapUsd, block.chainid
+        );
         console.log("CORE", address(core));
 
-        AaveV3Adapter aaveAdapter = new AaveV3Adapter(aavePool, aToken, address(core));
+        AaveV3Adapter aaveAdapter = new AaveV3Adapter(aavePool, address(core));
         console.log("ADAPTER_AAVE_V3", address(aaveAdapter));
 
         AaveFlashLoanProvider aaveFlash = new AaveFlashLoanProvider(aavePool, address(timelock));
@@ -123,6 +130,7 @@ contract DeployTestnetArbitrumSepoliaV2 is Script {
         string memory key = "deploy";
         vm.serializeAddress(key, "timelock", address(timelock));
         vm.serializeAddress(key, "core", address(core));
+        vm.serializeAddress(key, "subscriptions", address(subscriptions));
         vm.serializeAddress(key, "aaveAdapter", address(aaveAdapter));
         vm.serializeAddress(key, "aaveFlash", address(aaveFlash));
         vm.serializeAddress(key, "dexRouter", address(dexRouter));

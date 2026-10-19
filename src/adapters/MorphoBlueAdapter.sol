@@ -135,7 +135,16 @@ contract MorphoBlueAdapter is IProtocolAdapter {
             revert SepehrErrors.DebtAssetMismatch(params.loanToken, debtAsset);
         }
         IERC20(debtAsset).forceApprove(address(MORPHO), amount);
-        MORPHO.repay(params, amount, 0, user, "");
+        // Lot 6: a repayment that covers the whole debt (a close) repays every borrow share.
+        // Repaid as assets, Morpho's rounding into shares would leave dust of debt behind, which
+        // blocks withdrawing all the collateral, or round past the position's shares and revert.
+        uint256 debt = _debt(params, user);
+        if (debt != 0 && amount >= debt) {
+            MORPHO.repay(params, 0, MORPHO.position(MARKET_ID, user).borrowShares, user, "");
+        } else {
+            MORPHO.repay(params, amount, 0, user, "");
+        }
+        IERC20(debtAsset).forceApprove(address(MORPHO), 0);
         uint256 surplus = IERC20(debtAsset).balanceOf(address(this));
         if (surplus > 0) {
             IERC20(debtAsset).safeTransfer(core, surplus);
@@ -186,6 +195,14 @@ contract MorphoBlueAdapter is IProtocolAdapter {
     ) external view returns (uint256 debt) {
         IMorpho.MarketParams memory params = MORPHO.idToMarketParams(MARKET_ID);
         if (debtAsset != params.loanToken) return 0;
+        return _debt(params, user);
+    }
+
+    /// @dev What `user` owes in the market, interest accrued, rounded up as Morpho rounds it.
+    function _debt(
+        IMorpho.MarketParams memory params,
+        address user
+    ) internal view returns (uint256) {
         IMorpho.Position memory pos = MORPHO.position(MARKET_ID, user);
         if (pos.borrowShares == 0) return 0;
         IMorpho.Market memory mkt = MORPHO.market(MARKET_ID);
@@ -193,7 +210,7 @@ contract MorphoBlueAdapter is IProtocolAdapter {
         if (totalShares == 0) return 0;
         // Round up to match Morpho's internal accounting — this is the amount
         // the user owes, so under-reporting here would let an over-repay slip
-        // past SepehrCore's repayPercentBps check. I-5: includes accrued interest.
+        // past SepehrCore's MAX_REPAY_BPS check. I-5: includes accrued interest.
         return (uint256(pos.borrowShares) * _expectedTotalBorrowAssets(params, mkt) + totalShares - 1) / totalShares;
     }
 

@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {AaveFlashLoanProvider} from "../../src/flash/AaveFlashLoanProvider.sol";
 import {BalancerFlashLoanProvider} from "../../src/flash/BalancerFlashLoanProvider.sol";
+import {MorphoBlueFlashLoanProvider} from "../../src/flash/MorphoBlueFlashLoanProvider.sol";
 import {UniswapV3FlashLoanProvider} from "../../src/flash/UniswapV3FlashLoanProvider.sol";
 import {IFlashLoanProvider} from "../../src/interfaces/IFlashLoanProvider.sol";
 import {ISepehrCallback} from "../../src/interfaces/ISepehrCallback.sol";
@@ -212,5 +213,50 @@ contract UniswapV3FlashLoanForkTest is ForkTestBase {
 
         bool available = provider.isAvailable(WETH, 10 ether);
         assertTrue(available, "10 WETH should be available in the USDC/WETH pool");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Morpho Blue Flash Loan Fork Tests (Arbitrum One)
+// ═══════════════════════════════════════════════════════════════════════
+
+contract MorphoBlueFlashLoanForkTest is ForkTestBase {
+    address constant MORPHO = 0x6c247b1F6182318877311737BaC0844bAa518F5e;
+    address constant USDC = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
+
+    MorphoBlueFlashLoanProvider internal provider;
+    FlashLoanRepayer internal repayer;
+    bool internal _forked;
+
+    function setUp() public {
+        _forked = _tryCreateFork("RPC_ARBITRUM_PRIMARY_HTTP");
+        if (!_forked) return;
+
+        provider = new MorphoBlueFlashLoanProvider(MORPHO, address(this));
+        repayer = new FlashLoanRepayer();
+    }
+
+    function test_flashBorrow_usdcWithoutFee() public {
+        if (!_forked) return;
+
+        uint256 borrowAmount = 100_000e6;
+        uint256 morphoBefore = IERC20(USDC).balanceOf(MORPHO);
+
+        provider.flashBorrow(USDC, borrowAmount, address(repayer), "");
+
+        assertEq(repayer.lastAsset(), USDC);
+        assertEq(repayer.lastAmount(), borrowAmount);
+        assertEq(repayer.lastFee(), 0, "Morpho Blue lends for free");
+        assertEq(IERC20(USDC).balanceOf(MORPHO), morphoBefore, "Morpho is repaid in full");
+        assertEq(IERC20(USDC).allowance(address(provider), MORPHO), 0, "no allowance outlives the loan");
+    }
+
+    function test_isAvailable_followsMorphoLiquidity() public {
+        if (!_forked) return;
+
+        uint256 held = IERC20(USDC).balanceOf(MORPHO);
+        assertTrue(provider.isAvailable(USDC, held));
+        assertFalse(provider.isAvailable(USDC, held + 1));
+        assertEq(provider.getFlashLoanFeeBps(USDC), 0);
     }
 }
