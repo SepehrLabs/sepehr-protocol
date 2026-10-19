@@ -50,7 +50,7 @@ contract AaveV3AdapterForkTest is ForkTestBase {
         forked = _tryCreateFork("RPC_ETHEREUM_PRIMARY_HTTP");
         if (!forked) return;
 
-        adapter = new AaveV3Adapter(AAVE_V3_POOL, AWETH, address(this));
+        adapter = new AaveV3Adapter(AAVE_V3_POOL, address(this));
         user = makeAddr("forkUser");
 
         _createAavePosition();
@@ -189,5 +189,89 @@ contract AaveV3AdapterForkTest is ForkTestBase {
 
         uint256 valueAfter = adapter.getCollateralValueUsd(user);
         assertLt(valueAfter, valueBefore, "Collateral value should decrease after withdrawal");
+    }
+}
+
+/// @notice M-3 on Arbitrum One: a position with WETH and wstETH against USDC, where the adapter
+///         withdraws whichever collateral the user approved.
+contract AaveV3AdapterMultiCollateralArbitrumForkTest is ForkTestBase {
+    address constant POOL = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
+    address constant WETH = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
+    address constant WSTETH = 0x5979D7b546E38E414F7E9822514be443A4800529;
+    address constant WBTC = 0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f;
+    address constant USDC = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
+
+    AaveV3Adapter internal adapter;
+    bool internal forked;
+    address internal user;
+
+    function setUp() public {
+        forked = _tryCreateFork("RPC_ARBITRUM_PRIMARY_HTTP");
+        if (!forked) return;
+
+        adapter = new AaveV3Adapter(POOL, address(this));
+        user = makeAddr("multiCollateralUser");
+        deal(WETH, user, 3 ether);
+        deal(WSTETH, user, 3 ether);
+
+        vm.startPrank(user);
+        IERC20(WETH).approve(POOL, 3 ether);
+        IERC20(WSTETH).approve(POOL, 3 ether);
+        IAavePoolFork(POOL).supply(WETH, 3 ether, user, 0);
+        IAavePoolFork(POOL).supply(WSTETH, 3 ether, user, 0);
+        IAavePoolFork(POOL).borrow(USDC, 5000e6, 2, 0, user);
+        vm.stopPrank();
+    }
+
+    function _aToken(
+        address asset
+    ) internal view returns (address aToken) {
+        (,,,,,,,, aToken,,,,,,) = IAavePool(POOL).getReserveData(asset);
+    }
+
+    function _approve(
+        address asset
+    ) internal {
+        address aToken = _aToken(asset);
+        vm.prank(user);
+        IERC20(aToken).approve(address(adapter), type(uint256).max);
+    }
+
+    function test_checkDelegation_followsTheApprovedCollaterals() public {
+        if (!forked) return;
+
+        assertFalse(adapter.checkDelegation(user), "nothing approved yet");
+        _approve(WSTETH);
+        assertTrue(adapter.checkDelegation(user));
+        assertTrue(adapter.isDelegated(user, WSTETH));
+        assertFalse(adapter.isDelegated(user, WETH));
+
+        AaveV3Adapter.Collateral[] memory list = adapter.collateralsOf(user);
+        assertEq(list.length, 2);
+        for (uint256 i = 0; i < list.length; i++) {
+            assertGt(list[i].balance, 0);
+            assertEq(list[i].allowance, list[i].asset == WSTETH ? type(uint256).max : 0);
+        }
+    }
+
+    function test_checkDelegation_ignoresAnApprovedAssetNotSupplied() public {
+        if (!forked) return;
+
+        _approve(WBTC);
+        assertFalse(adapter.checkDelegation(user));
+    }
+
+    function test_withdrawCollateral_takesTheNamedCollateral() public {
+        if (!forked) return;
+
+        _approve(WSTETH);
+        address recipient = makeAddr("recipient");
+        uint256 wethCollateralBefore = IERC20(_aToken(WETH)).balanceOf(user);
+
+        adapter.withdrawCollateral(user, WSTETH, 1 ether, recipient);
+
+        assertEq(IERC20(WSTETH).balanceOf(recipient), 1 ether);
+        assertEq(IERC20(_aToken(WETH)).balanceOf(user), wethCollateralBefore, "WETH untouched");
+        assertLt(adapter.getHealthFactor(user), type(uint256).max);
     }
 }

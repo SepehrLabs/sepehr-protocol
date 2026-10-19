@@ -5,7 +5,7 @@ import {IAavePool} from "../../src/interfaces/external/IAavePool.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @notice Mock Aave Pool that implements getUserAccountData, repay, and withdraw
-///         for unit-testing AaveV3Adapter.
+///         for unit-testing AaveV3Adapter and AaveV4Adapter.
 contract MockAavePoolAdapter is IAavePool {
     struct AccountData {
         uint256 totalCollateralBase;
@@ -34,6 +34,8 @@ contract MockAavePoolAdapter is IAavePool {
     mapping(address => AccountData) private _accountData;
     mapping(address => address) private _variableDebtToken;
     mapping(address => address) private _aToken;
+    address[] private _reserves;
+    mapping(address => uint256) private _userConfiguration;
 
     RepayCall[] public repayCalls;
     WithdrawCall[] public withdrawCalls;
@@ -185,6 +187,30 @@ contract MockAavePoolAdapter is IAavePool {
         address aToken
     ) external {
         _aToken[asset] = aToken;
+    }
+
+    /// @dev Lists `asset` as the next reserve; its id is its index.
+    function addReserve(
+        address asset
+    ) external {
+        _reserves.push(asset);
+    }
+
+    function setUserConfiguration(
+        address user,
+        uint256 configuration
+    ) external {
+        _userConfiguration[user] = configuration;
+    }
+
+    function getReservesList() external view override returns (address[] memory) {
+        return _reserves;
+    }
+
+    function getUserConfiguration(
+        address user
+    ) external view override returns (uint256) {
+        return _userConfiguration[user];
     }
 
     function getReserveData(

@@ -51,9 +51,13 @@ contract CamelotRouter is IDexRouter, ReentrancyGuard {
         path[0] = tokenIn;
         path[1] = tokenOut;
 
-        uint256[] memory amounts =
-            ROUTER.swapExactTokensForTokens(amountIn, minAmountOut, path, msg.sender, REFERRER, deadline);
-        amountOut = amounts[amounts.length - 1];
+        // Camelot's V2 router has no `swapExactTokensForTokens`: its fee-on-transfer variant
+        // checks `minAmountOut` against what the recipient received and returns nothing.
+        uint256 outBefore = IERC20(tokenOut).balanceOf(msg.sender);
+        ROUTER.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            amountIn, minAmountOut, path, msg.sender, REFERRER, deadline
+        );
+        amountOut = IERC20(tokenOut).balanceOf(msg.sender) - outBefore;
 
         // D5: zero the external-router allowance and sweep any residual `tokenIn`.
         IERC20(tokenIn).forceApprove(address(ROUTER), 0);

@@ -4,13 +4,25 @@ pragma solidity ^0.8.28;
 import {Script, console} from "forge-std/Script.sol";
 
 import {SepehrCore} from "../src/SepehrCore.sol";
+import {SepehrSubscriptions} from "../src/SepehrSubscriptions.sol";
 import {SepehrTimelock} from "../src/SepehrTimelock.sol";
+
+/// @notice The two views of a Safe the deploy checks.
+interface ISafeSigners {
+    function getThreshold() external view returns (uint256);
+
+    function getOwners() external view returns (address[] memory);
+}
 
 contract DeployCore is Script {
     /// @notice Arbitrum One.
     uint256 internal constant ARBITRUM_ONE_CHAIN_ID = 42_161;
     /// @notice Arbitrum Sepolia (public testnet).
     uint256 internal constant ARBITRUM_SEPOLIA_CHAIN_ID = 421_614;
+    /// @notice ADR-0017: on Arbitrum One the owner is a Safe that needs at least 2 signatures
+    /// out of at least 3 signers.
+    uint256 internal constant MIN_SAFE_THRESHOLD = 2;
+    uint256 internal constant MIN_SAFE_SIGNERS = 3;
 
     function run() external {
         // ADR-0011: V1 is a mono-Arbitrum deploy. The script refuses to broadcast on any
@@ -35,6 +47,10 @@ contract DeployCore is Script {
         // raises it via `setTvlCapUsd` once the runtime numbers justify it.
         uint256 tvlCapUsd = vm.envOr("SEPEHR_TVL_CAP_USD", uint256(7_500_000_000_000));
 
+        // ADR-0017: the owner proposes, executes and cancels every timelock operation and holds
+        // the owner-only calls (unpause, Titan grants, revenue). On mainnet no single key may.
+        if (block.chainid == ARBITRUM_ONE_CHAIN_ID) _requireSafe(owner);
+
         vm.startBroadcast(deployer);
 
         address[] memory proposers = new address[](1);
@@ -47,8 +63,17 @@ contract DeployCore is Script {
         SepehrTimelock timelock = new SepehrTimelock(timelockDelay, proposers, executors, address(0));
         console.log("SepehrTimelock deployed at:", address(timelock));
 
+        // SepehrSubscriptions names the core deployed right after it; the core checks it.
+        SepehrSubscriptions subscriptions = new SepehrSubscriptions(
+            owner,
+            address(timelock),
+            usdcAddress,
+            block.chainid,
+            vm.computeCreateAddress(deployer, vm.getNonce(deployer) + 1)
+        );
+        console.log("SepehrSubscriptions deployed at:", address(subscriptions));
         SepehrCore core = new SepehrCore(
-            owner, address(timelock), pauseGuardian, usdcAddress, minCollateralUsd, tvlCapUsd, block.chainid
+            owner, address(timelock), pauseGuardian, address(subscriptions), minCollateralUsd, tvlCapUsd, block.chainid
         );
         console.log("SepehrCore deployed at:", address(core));
 
@@ -59,5 +84,16 @@ contract DeployCore is Script {
         require(!core.strictCanonicalRoutes(), "DeployCore: strictCanonicalRoutes must default to false");
 
         vm.stopBroadcast();
+    }
+
+    function _requireSafe(
+        address owner
+    ) internal view {
+        require(owner.code.length != 0, "DeployCore: on Arbitrum One the owner must be a Safe");
+        require(
+            ISafeSigners(owner).getThreshold() >= MIN_SAFE_THRESHOLD
+                && ISafeSigners(owner).getOwners().length >= MIN_SAFE_SIGNERS,
+            "DeployCore: the owner Safe needs 2 signatures out of 3 signers or more"
+        );
     }
 }

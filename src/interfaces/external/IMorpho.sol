@@ -72,3 +72,13 @@ interface IMorphoIrm {
 interface IMorphoOracle {
     function price() external view returns (uint256);
 }
+
+/// @notice Morpho Blue flash loans: free, in any token Morpho holds. Morpho sends `assets`,
+/// calls `onMorphoFlashLoan` on the caller, then pulls `assets` back with `transferFrom`.
+interface IMorphoFlashLoan {
+    function flashLoan(
+        address token,
+        uint256 assets,
+        bytes calldata data
+    ) external;
+}

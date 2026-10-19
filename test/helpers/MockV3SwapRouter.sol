@@ -28,6 +28,31 @@ contract MockV3SwapRouter {
         uint160 sqrtPriceLimitX96;
     }
 
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    bytes public lastPath;
+
+    /// @dev Pays `tokenOut` (the path's last token) at `exchangeRate`, whatever the hops.
+    function exactInput(
+        ExactInputParams calldata params
+    ) external payable returns (uint256 amountOut) {
+        lastPath = params.path;
+        lastDeadline = params.deadline;
+        bytes calldata path = params.path;
+        address tokenIn = address(bytes20(path[:20]));
+        address tokenOut = address(bytes20(path[path.length - 20:]));
+        IERC20(tokenIn).transferFrom(msg.sender, address(this), params.amountIn);
+        amountOut = (params.amountIn * exchangeRate) / 1e18;
+        require(amountOut >= params.amountOutMinimum, "MockV3: slippage");
+        IERC20(tokenOut).transfer(params.recipient, amountOut);
+    }
+
     function exactInputSingle(
         ExactInputSingleParams calldata params
     ) external payable returns (uint256 amountOut) {

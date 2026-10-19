@@ -15,24 +15,21 @@ contract MockCamelotExtRouter {
         exchangeRate = rate;
     }
 
-    function swapExactTokensForTokens(
+    /// @dev As Camelot's V2 router: the only exact-input swap, returning nothing.
+    function swapExactTokensForTokensSupportingFeeOnTransferTokens(
         uint256 amountIn,
         uint256 amountOutMin,
         address[] calldata path,
         address to,
         address referrer,
         uint256 deadline
-    ) external returns (uint256[] memory amounts) {
+    ) external {
         lastReferrer = referrer;
         lastDeadline = deadline;
         IERC20(path[0]).transferFrom(msg.sender, address(this), amountIn);
         uint256 amountOut = (amountIn * exchangeRate) / 1e18;
         require(amountOut >= amountOutMin, "MockCamelot: slippage");
         IERC20(path[path.length - 1]).transfer(to, amountOut);
-
-        amounts = new uint256[](path.length);
-        amounts[0] = amountIn;
-        amounts[path.length - 1] = amountOut;
     }
 
     function getAmountsOut(

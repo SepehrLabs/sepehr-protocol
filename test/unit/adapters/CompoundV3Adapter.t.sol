@@ -185,6 +185,30 @@ contract CompoundV3AdapterTest is Test {
         assertEq(debtToken.balanceOf(address(adapter)), 0);
     }
 
+    function test_repay_sendsWhatCometLeftToTheCore() public {
+        uint256 repayAmount = 500e6;
+        debtToken.mint(address(adapter), repayAmount + 7e6);
+
+        vm.prank(core);
+        adapter.repay(user, address(debtToken), repayAmount);
+
+        assertEq(debtToken.balanceOf(address(comet)), repayAmount);
+        assertEq(debtToken.balanceOf(address(adapter)), 0);
+        assertEq(debtToken.balanceOf(core), 7e6);
+    }
+
+    // ── getDebt ──────────────────────────────────────────────────────────
+
+    function test_getDebt_readsTheBaseBorrowBalance() public {
+        comet.setBorrowBalance(user, 2500e6);
+        assertEq(adapter.getDebt(user, address(debtToken)), 2500e6);
+    }
+
+    function test_getDebt_isZeroForAnyOtherAsset() public {
+        comet.setBorrowBalance(user, 2500e6);
+        assertEq(adapter.getDebt(user, address(collateralA)), 0);
+    }
+
     // ── withdrawCollateral ───────────────────────────────────────────────
 
     function test_withdrawCollateral_revertsWhenNotCore() public {

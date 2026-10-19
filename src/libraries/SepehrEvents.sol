@@ -8,14 +8,12 @@ library SepehrEvents {
     event Unsubscribed(address indexed user);
     event TierUpgraded(address indexed user, uint8 oldTier, uint8 newTier);
     event TitanSubscriptionGranted(address indexed user, uint256 expiresAt);
+    /// @notice M-1: `amount` of `user`'s payment was earned and moved to the owner's revenue.
+    event RevenueSettled(address indexed user, uint256 amount);
 
     // ─── Positions ───────────────────────────────────────────────
     event ProtectionEnabled(
-        address indexed user,
-        bytes32 indexed protocolKey,
-        uint256 thresholdHF,
-        uint256 maxSlippageBps,
-        uint256 repayPercentBps
+        address indexed user, bytes32 indexed protocolKey, uint256 thresholdHF, uint256 maxSlippageBps, uint256 targetHF
     );
     event ProtectionDisabled(address indexed user, bytes32 indexed protocolKey);
     /// @notice A18: emitted when `unsubscribe` iterates and wipes the user's `_protections`
@@ -30,7 +28,7 @@ library SepehrEvents {
         bytes32 indexed protocolKey,
         uint256 newThresholdHF,
         uint256 newMaxSlippageBps,
-        uint256 newRepayPercentBps
+        uint256 newTargetHF
     );
 
     // ─── Triggers ────────────────────────────────────────────────
@@ -52,6 +50,30 @@ library SepehrEvents {
     );
     /// @notice H-3 / L-2: tokens a trigger did not consume, sent back to the protected user.
     event SurplusReturned(address indexed user, address indexed asset, uint256 amount);
+    /// @notice Lot 6: anyone may now rescue under `newHF` (0: keepers only).
+    event OpenExecutionHFUpdated(uint256 oldHF, uint256 newHF);
+    /// @notice Lot 6: a position's stop-loss and take-profit, on `priceAsset`'s oracle price.
+    event ExitOrderSet(
+        address indexed user,
+        bytes32 indexed protocolKey,
+        address priceAsset,
+        uint256 stopLossUsd,
+        uint256 takeProfitUsd
+    );
+    /// @notice Lot 6: an exit order closed the position: the whole debt repaid, the collateral sold.
+    event PositionClosed(
+        address indexed user,
+        bytes32 indexed protocolKey,
+        address indexed keeper,
+        uint256 debtRepaid,
+        uint256 collateralSold,
+        uint256 price,
+        uint256 fee
+    );
+    /// @notice Lot 6: a rescue repaid `repaid` of `asset` from the user's wallet, plus `fee`.
+    event RepaidFromWallet(
+        address indexed user, bytes32 indexed protocolKey, address indexed asset, uint256 repaid, uint256 fee
+    );
     event OwnerFeesWithdrawn(address indexed asset, address indexed to, uint256 amount);
     event KeeperFeesWithdrawn(address indexed keeper, address indexed asset, uint256 amount);
     event TierFeeBpsUpdated(uint8 indexed tier, uint256 oldBps, uint256 newBps);
@@ -84,6 +106,8 @@ library SepehrEvents {
     event DexRouterAdded(address indexed router);
     event DexRouterRemoved(address indexed router);
     event PauseGuardianUpdated(address indexed oldGuardian, address indexed newGuardian);
+    /// @notice Governance moved to another timelock.
+    event TimelockUpdated(address indexed oldTimelock, address indexed newTimelock);
     event CanonicalRouteSet(address indexed router, address indexed tokenIn, address indexed tokenOut, bytes data);
     event CanonicalRouteCleared(address indexed router, address indexed tokenIn, address indexed tokenOut);
     event StrictCanonicalRoutesUpdated(bool enabled);

@@ -6,12 +6,15 @@ import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import {SepehrCore} from "../../src/SepehrCore.sol";
+import {SepehrSubscriptions} from "../../src/SepehrSubscriptions.sol";
 import {IProtocolAdapter} from "../../src/interfaces/IProtocolAdapter.sol";
 import {ISepehrCore} from "../../src/interfaces/ISepehrCore.sol";
+import {ISepehrSubscriptions} from "../../src/interfaces/ISepehrSubscriptions.sol";
 import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
 import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockChainlinkAggregator} from "../helpers/MockChainlinkAggregator.sol";
+import {SepehrStack} from "../helpers/SepehrStack.sol";
 
 contract MockERC20 is ERC20 {
     constructor(
@@ -27,8 +30,9 @@ contract MockERC20 is ERC20 {
     }
 }
 
-contract SepehrCoreAdminTest is Test {
+contract SepehrCoreAdminTest is SepehrStack {
     SepehrCore public core;
+    SepehrSubscriptions public subs;
     MockAdapter public adapter;
     MockERC20 public usdc;
 
@@ -43,7 +47,7 @@ contract SepehrCoreAdminTest is Test {
         adapter = new MockAdapter();
         usdc = new MockERC20("USD Coin", "USDC");
 
-        core = new SepehrCore(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max, block.chainid);
+        (core, subs) = _deployStack(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max);
     }
 
     // ─── addAdapter ─────────────────────────────────────────────
@@ -214,202 +218,202 @@ contract SepehrCoreAdminTest is Test {
 
     function test_setTierFeeBps() public {
         vm.prank(timelock);
-        core.setTierFeeBps(1, 50);
+        subs.setTierFeeBps(1, 50);
 
-        assertEq(core.TIER_FEE_BPS(0), 50);
+        assertEq(subs.TIER_FEE_BPS(0), 50);
     }
 
     function test_setTierFeeBps_emitsEvent() public {
-        vm.expectEmit(true, false, false, true, address(core));
+        vm.expectEmit(true, false, false, true, address(subs));
         emit SepehrEvents.TierFeeBpsUpdated(1, 20, 50);
 
         vm.prank(timelock);
-        core.setTierFeeBps(1, 50);
+        subs.setTierFeeBps(1, 50);
     }
 
     function test_setTierFeeBps_revertsOnNonTimelock() public {
         vm.expectRevert(SepehrErrors.NotTimelock.selector);
-        core.setTierFeeBps(1, 50);
+        subs.setTierFeeBps(1, 50);
     }
 
     function test_setTierFeeBps_revertsOnInvalidTier() public {
         vm.expectRevert(SepehrErrors.InvalidTier.selector);
         vm.prank(timelock);
-        core.setTierFeeBps(0, 50);
+        subs.setTierFeeBps(0, 50);
     }
 
     function test_setTierFeeBps_revertsOnTierFive() public {
         vm.expectRevert(SepehrErrors.InvalidTier.selector);
         vm.prank(timelock);
-        core.setTierFeeBps(5, 50);
+        subs.setTierFeeBps(5, 50);
     }
 
     function test_setTierFeeBps_canSetToZero() public {
         vm.prank(timelock);
-        core.setTierFeeBps(1, 0);
+        subs.setTierFeeBps(1, 0);
 
-        assertEq(core.TIER_FEE_BPS(0), 0);
+        assertEq(subs.TIER_FEE_BPS(0), 0);
     }
 
     function test_setTierFeeBps_allTiers() public {
         vm.startPrank(timelock);
-        core.setTierFeeBps(1, 15);
-        core.setTierFeeBps(2, 8);
-        core.setTierFeeBps(3, 3);
-        core.setTierFeeBps(4, 2);
+        subs.setTierFeeBps(1, 15);
+        subs.setTierFeeBps(2, 8);
+        subs.setTierFeeBps(3, 3);
+        subs.setTierFeeBps(4, 2);
         vm.stopPrank();
 
-        assertEq(core.TIER_FEE_BPS(0), 15);
-        assertEq(core.TIER_FEE_BPS(1), 8);
-        assertEq(core.TIER_FEE_BPS(2), 3);
-        assertEq(core.TIER_FEE_BPS(3), 2);
+        assertEq(subs.TIER_FEE_BPS(0), 15);
+        assertEq(subs.TIER_FEE_BPS(1), 8);
+        assertEq(subs.TIER_FEE_BPS(2), 3);
+        assertEq(subs.TIER_FEE_BPS(3), 2);
     }
 
     /// @dev A8: timelock cannot raise any tier fee above `MAX_TIER_FEE_BPS` (1%).
     function test_setTierFeeBps_revertsAboveMaxFeeBps() public {
-        uint256 max = core.MAX_TIER_FEE_BPS();
+        uint256 max = subs.MAX_TIER_FEE_BPS();
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.TierFeeBpsTooHigh.selector, max + 1, max));
         vm.prank(timelock);
-        core.setTierFeeBps(1, max + 1);
+        subs.setTierFeeBps(1, max + 1);
     }
 
     function test_setTierFeeBps_allowsExactlyMaxFeeBps() public {
-        uint256 max = core.MAX_TIER_FEE_BPS();
+        uint256 max = subs.MAX_TIER_FEE_BPS();
         vm.prank(timelock);
-        core.setTierFeeBps(2, max);
-        assertEq(core.TIER_FEE_BPS(1), max);
+        subs.setTierFeeBps(2, max);
+        assertEq(subs.TIER_FEE_BPS(1), max);
     }
 
     // ─── A13: setTierPrice ──────────────────────────────────────
 
     function test_setTierPrice_monthly_happyPath() public {
-        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(0);
+        uint256 old = subs.TIER_PRICES_MONTHLY_USD_6(0);
         uint256 newPrice = old + 1_000_000; // $1 bump
         vm.prank(timelock);
-        core.setTierPrice(1, false, newPrice);
-        assertEq(core.TIER_PRICES_MONTHLY_USD_6(0), newPrice);
+        subs.setTierPrice(1, false, newPrice);
+        assertEq(subs.TIER_PRICES_MONTHLY_USD_6(0), newPrice);
     }
 
     function test_setTierPrice_annual_happyPath() public {
-        uint256 old = core.TIER_PRICES_ANNUAL_USD_6(1);
+        uint256 old = subs.TIER_PRICES_ANNUAL_USD_6(1);
         uint256 newPrice = old - 10_000_000; // $10 discount
         vm.prank(timelock);
-        core.setTierPrice(2, true, newPrice);
-        assertEq(core.TIER_PRICES_ANNUAL_USD_6(1), newPrice);
+        subs.setTierPrice(2, true, newPrice);
+        assertEq(subs.TIER_PRICES_ANNUAL_USD_6(1), newPrice);
     }
 
     function test_setTierPrice_emitsEvent() public {
-        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(2);
+        uint256 old = subs.TIER_PRICES_MONTHLY_USD_6(2);
         uint256 newPrice = old + 5_000_000;
-        vm.expectEmit(true, false, false, true, address(core));
+        vm.expectEmit(true, false, false, true, address(subs));
         emit SepehrEvents.TierPriceUpdated(3, false, old, newPrice);
         vm.prank(timelock);
-        core.setTierPrice(3, false, newPrice);
+        subs.setTierPrice(3, false, newPrice);
     }
 
     function test_setTierPrice_revertsOnNonTimelock() public {
         vm.expectRevert(SepehrErrors.NotTimelock.selector);
-        core.setTierPrice(1, false, 10_000_000);
+        subs.setTierPrice(1, false, 10_000_000);
     }
 
     function test_setTierPrice_revertsOnTierZero() public {
         vm.expectRevert(SepehrErrors.InvalidTier.selector);
         vm.prank(timelock);
-        core.setTierPrice(0, false, 10_000_000);
+        subs.setTierPrice(0, false, 10_000_000);
     }
 
     function test_setTierPrice_revertsOnTierFour() public {
         vm.expectRevert(SepehrErrors.InvalidTier.selector);
         vm.prank(timelock);
-        core.setTierPrice(4, false, 10_000_000);
+        subs.setTierPrice(4, false, 10_000_000);
     }
 
     function test_setTierPrice_revertsOnZeroPrice() public {
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
         vm.prank(timelock);
-        core.setTierPrice(1, false, 0);
+        subs.setTierPrice(1, false, 0);
     }
 
     function test_setTierPrice_revertsOnAboveMaxDeviation() public {
-        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(0);
-        uint256 cap = core.MAX_TIER_PRICE_DEVIATION_BPS();
+        uint256 old = subs.TIER_PRICES_MONTHLY_USD_6(0);
+        uint256 cap = subs.MAX_TIER_PRICE_DEVIATION_BPS();
         uint256 tooHigh = (old * (10_000 + cap)) / 10_000 + 1;
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.TierPriceDeviationTooLarge.selector, old, tooHigh));
         vm.prank(timelock);
-        core.setTierPrice(1, false, tooHigh);
+        subs.setTierPrice(1, false, tooHigh);
     }
 
     function test_setTierPrice_revertsOnBelowMinDeviation() public {
-        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(1);
-        uint256 cap = core.MAX_TIER_PRICE_DEVIATION_BPS();
+        uint256 old = subs.TIER_PRICES_MONTHLY_USD_6(1);
+        uint256 cap = subs.MAX_TIER_PRICE_DEVIATION_BPS();
         uint256 tooLow = (old * (10_000 - cap)) / 10_000 - 1;
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.TierPriceDeviationTooLarge.selector, old, tooLow));
         vm.prank(timelock);
-        core.setTierPrice(2, false, tooLow);
+        subs.setTierPrice(2, false, tooLow);
     }
 
     function test_setTierPrice_allowsExactlyMaxDeviation() public {
-        uint256 old = core.TIER_PRICES_ANNUAL_USD_6(2);
-        uint256 cap = core.MAX_TIER_PRICE_DEVIATION_BPS();
+        uint256 old = subs.TIER_PRICES_ANNUAL_USD_6(2);
+        uint256 cap = subs.MAX_TIER_PRICE_DEVIATION_BPS();
         uint256 maxAllowed = (old * (10_000 + cap)) / 10_000;
         vm.prank(timelock);
-        core.setTierPrice(3, true, maxAllowed);
-        assertEq(core.TIER_PRICES_ANNUAL_USD_6(2), maxAllowed);
+        subs.setTierPrice(3, true, maxAllowed);
+        assertEq(subs.TIER_PRICES_ANNUAL_USD_6(2), maxAllowed);
     }
 
     // ─── M1 · tier price cooldown ───────────────────────────────
 
     function test_setTierPrice_firstCallSkipsCooldown() public {
-        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(0);
+        uint256 old = subs.TIER_PRICES_MONTHLY_USD_6(0);
         uint256 next = (old * 9000) / 10_000; // -10%
         vm.prank(timelock);
-        core.setTierPrice(1, false, next);
-        assertEq(core.tierPriceLastUpdatedAt(1, false), block.timestamp);
+        subs.setTierPrice(1, false, next);
+        assertEq(subs.tierPriceLastUpdatedAt(1, false), block.timestamp);
     }
 
     function test_setTierPrice_revertsWhenInsideCooldown() public {
-        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(0);
+        uint256 old = subs.TIER_PRICES_MONTHLY_USD_6(0);
         uint256 first = (old * 9000) / 10_000;
         vm.prank(timelock);
-        core.setTierPrice(1, false, first);
+        subs.setTierPrice(1, false, first);
 
-        uint256 lastUpdate = core.tierPriceLastUpdatedAt(1, false);
-        uint256 nextAllowed = lastUpdate + core.TIER_PRICE_UPDATE_COOLDOWN();
+        uint256 lastUpdate = subs.tierPriceLastUpdatedAt(1, false);
+        uint256 nextAllowed = lastUpdate + subs.TIER_PRICE_UPDATE_COOLDOWN();
         vm.warp(nextAllowed - 1);
 
         uint256 second = (first * 9000) / 10_000;
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.TierPriceCooldown.selector, lastUpdate, nextAllowed));
         vm.prank(timelock);
-        core.setTierPrice(1, false, second);
+        subs.setTierPrice(1, false, second);
     }
 
     function test_setTierPrice_allowsExactlyAtCooldownBoundary() public {
-        uint256 old = core.TIER_PRICES_MONTHLY_USD_6(0);
+        uint256 old = subs.TIER_PRICES_MONTHLY_USD_6(0);
         uint256 first = (old * 9000) / 10_000;
         vm.prank(timelock);
-        core.setTierPrice(1, false, first);
+        subs.setTierPrice(1, false, first);
 
-        vm.warp(block.timestamp + core.TIER_PRICE_UPDATE_COOLDOWN());
+        vm.warp(block.timestamp + subs.TIER_PRICE_UPDATE_COOLDOWN());
 
         uint256 second = (first * 9000) / 10_000;
         vm.prank(timelock);
-        core.setTierPrice(1, false, second);
-        assertEq(core.TIER_PRICES_MONTHLY_USD_6(0), second);
+        subs.setTierPrice(1, false, second);
+        assertEq(subs.TIER_PRICES_MONTHLY_USD_6(0), second);
     }
 
     function test_setTierPrice_cooldownIsPerKey() public {
         // A cooldown set on (tier=1, monthly) must not block (tier=2, monthly) or (tier=1, annual).
-        uint256 oldM1 = core.TIER_PRICES_MONTHLY_USD_6(0);
+        uint256 oldM1 = subs.TIER_PRICES_MONTHLY_USD_6(0);
         vm.prank(timelock);
-        core.setTierPrice(1, false, (oldM1 * 9000) / 10_000);
+        subs.setTierPrice(1, false, (oldM1 * 9000) / 10_000);
 
-        uint256 oldM2 = core.TIER_PRICES_MONTHLY_USD_6(1);
+        uint256 oldM2 = subs.TIER_PRICES_MONTHLY_USD_6(1);
         vm.prank(timelock);
-        core.setTierPrice(2, false, (oldM2 * 9000) / 10_000);
+        subs.setTierPrice(2, false, (oldM2 * 9000) / 10_000);
 
-        uint256 oldA1 = core.TIER_PRICES_ANNUAL_USD_6(0);
+        uint256 oldA1 = subs.TIER_PRICES_ANNUAL_USD_6(0);
         vm.prank(timelock);
-        core.setTierPrice(1, true, (oldA1 * 9000) / 10_000);
+        subs.setTierPrice(1, true, (oldA1 * 9000) / 10_000);
     }
 
     // ─── pause ──────────────────────────────────────────────────
@@ -561,6 +565,38 @@ contract SepehrCoreAdminTest is Test {
         core.setPauseGuardian(makeAddr("newGuardian"));
     }
 
+    // ─── Governance rotation and cancellations ──────────────────
+
+    function test_setTimelock_movesGovernance() public {
+        address next = makeAddr("next timelock");
+        vm.expectEmit(true, true, false, false, address(core));
+        emit SepehrEvents.TimelockUpdated(timelock, next);
+        vm.prank(timelock);
+        core.setTimelock(next);
+        assertEq(core.timelock(), next);
+
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
+        vm.prank(timelock);
+        core.setPauseGuardian(makeAddr("g"));
+        vm.prank(next);
+        core.setPauseGuardian(makeAddr("g"));
+    }
+
+    function test_setTimelock_revertsFromAnyoneElseOrOnZero() public {
+        vm.expectRevert(SepehrErrors.NotTimelock.selector);
+        core.setTimelock(makeAddr("next"));
+        vm.expectRevert(SepehrErrors.ZeroAddress.selector);
+        vm.prank(timelock);
+        core.setTimelock(address(0));
+    }
+
+    function test_clearProtections_onlyFromSubscriptions() public {
+        vm.expectRevert(SepehrErrors.NotSubscriptions.selector);
+        core.clearProtections(makeAddr("user"));
+        vm.prank(address(subs));
+        core.clearProtections(makeAddr("user"));
+    }
+
     // ─── Flash loan provider management ─────────────────────────
 
     function test_addFlashLoanProvider_viaTimelock() public {
@@ -655,6 +691,12 @@ contract SepehrCoreAdminTest is Test {
         assertTrue(enabled);
     }
 
+    function test_setAdapterEnabled_revertsWhenNotRegistered() public {
+        vm.expectRevert(abi.encodeWithSelector(SepehrErrors.AdapterNotRegistered.selector, PROTOCOL_KEY));
+        vm.prank(timelock);
+        core.setAdapterEnabled(PROTOCOL_KEY, false);
+    }
+
     function test_setAdapterEnabled_emitsDisabledEvent() public {
         vm.prank(timelock);
         core.addAdapter(PROTOCOL_KEY, address(adapter));
@@ -711,15 +753,15 @@ contract SepehrCoreAdminTest is Test {
 
     function test_constructor_revertsOnZeroTimelock() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, address(0), guardian, address(usdc), 500e8, type(uint256).max, block.chainid);
+        new SepehrCore(owner, address(0), guardian, address(subs), 500e8, type(uint256).max, block.chainid);
     }
 
     function test_constructor_revertsOnZeroGuardian() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
-        new SepehrCore(owner, timelock, address(0), address(usdc), 500e8, type(uint256).max, block.chainid);
+        new SepehrCore(owner, timelock, address(0), address(subs), 500e8, type(uint256).max, block.chainid);
     }
 
-    function test_constructor_revertsOnZeroUsdc() public {
+    function test_constructor_revertsOnZeroSubscriptions() public {
         vm.expectRevert(SepehrErrors.ZeroAddress.selector);
         new SepehrCore(owner, timelock, guardian, address(0), 500e8, type(uint256).max, block.chainid);
     }
@@ -728,20 +770,21 @@ contract SepehrCoreAdminTest is Test {
         assertEq(core.timelock(), timelock);
         assertEq(core.pauseGuardian(), guardian);
         assertEq(core.minCollateralUsd(), 500e8);
-        assertEq(address(core.usdc()), address(usdc));
+        assertEq(address(core.subscriptions()), address(subs));
+        assertEq(address(subs.usdc()), address(usdc));
         assertEq(core.owner(), owner);
         assertEq(core.expectedChainId(), block.chainid);
     }
 
     function test_constructor_revertsOnZeroExpectedChainId() public {
         vm.expectRevert(SepehrErrors.ZeroAmount.selector);
-        new SepehrCore(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max, 0);
+        new SepehrCore(owner, timelock, guardian, address(subs), 500e8, type(uint256).max, 0);
     }
 
     function test_constructor_revertsOnWrongChainId() public {
         uint256 fakeChainId = block.chainid + 1;
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.WrongChain.selector, fakeChainId, block.chainid));
-        new SepehrCore(owner, timelock, guardian, address(usdc), 500e8, type(uint256).max, fakeChainId);
+        new SepehrCore(owner, timelock, guardian, address(subs), 500e8, type(uint256).max, fakeChainId);
     }
 
     // ─── setMinCollateralUsd (A7) ───────────────────────────────
@@ -774,57 +817,57 @@ contract SepehrCoreAdminTest is Test {
     // ─── Tier pricing defaults ──────────────────────────────────
 
     function test_tierFeeBps_defaults() public view {
-        assertEq(core.TIER_FEE_BPS(0), 20); // Shield
-        assertEq(core.TIER_FEE_BPS(1), 10); // Guardian
-        assertEq(core.TIER_FEE_BPS(2), 5); // Watchtower
-        assertEq(core.TIER_FEE_BPS(3), 5); // Titan
+        assertEq(subs.TIER_FEE_BPS(0), 20); // Shield
+        assertEq(subs.TIER_FEE_BPS(1), 15); // Guardian
+        assertEq(subs.TIER_FEE_BPS(2), 10); // Watchtower
+        assertEq(subs.TIER_FEE_BPS(3), 10); // Titan
     }
 
     function test_tierMaxCollateral_defaults() public view {
-        assertEq(core.TIER_MAX_COLLATERAL_USD_8(0), 15_000e8);
-        assertEq(core.TIER_MAX_COLLATERAL_USD_8(1), 100_000e8);
-        assertEq(core.TIER_MAX_COLLATERAL_USD_8(2), 300_000e8);
-        assertEq(core.TIER_MAX_COLLATERAL_USD_8(3), type(uint256).max);
+        assertEq(subs.TIER_MAX_COLLATERAL_USD_8(0), 15_000e8);
+        assertEq(subs.TIER_MAX_COLLATERAL_USD_8(1), 100_000e8);
+        assertEq(subs.TIER_MAX_COLLATERAL_USD_8(2), 300_000e8);
+        assertEq(subs.TIER_MAX_COLLATERAL_USD_8(3), type(uint256).max);
     }
 
     function test_tierPricesMonthly_defaults() public view {
-        assertEq(core.TIER_PRICES_MONTHLY_USD_6(0), 9_000_000);
-        assertEq(core.TIER_PRICES_MONTHLY_USD_6(1), 49_000_000);
-        assertEq(core.TIER_PRICES_MONTHLY_USD_6(2), 200_000_000);
+        assertEq(subs.TIER_PRICES_MONTHLY_USD_6(0), 4_990_000);
+        assertEq(subs.TIER_PRICES_MONTHLY_USD_6(1), 14_990_000);
+        assertEq(subs.TIER_PRICES_MONTHLY_USD_6(2), 49_990_000);
     }
 
     function test_tierPricesAnnual_defaults() public view {
-        assertEq(core.TIER_PRICES_ANNUAL_USD_6(0), 86_400_000);
-        assertEq(core.TIER_PRICES_ANNUAL_USD_6(1), 470_400_000);
-        assertEq(core.TIER_PRICES_ANNUAL_USD_6(2), 1_920_000_000);
+        assertEq(subs.TIER_PRICES_ANNUAL_USD_6(0), 49_000_000);
+        assertEq(subs.TIER_PRICES_ANNUAL_USD_6(1), 149_000_000);
+        assertEq(subs.TIER_PRICES_ANNUAL_USD_6(2), 499_000_000);
     }
 
     // ─── A22: full-array getters for tier pricing state ────────
 
     function test_getTierFeeBps_returnsAllFour() public view {
-        uint256[4] memory arr = core.getTierFeeBps();
+        uint256[4] memory arr = subs.getTierFeeBps();
         assertEq(arr[0], 20);
-        assertEq(arr[1], 10);
-        assertEq(arr[2], 5);
-        assertEq(arr[3], 5);
+        assertEq(arr[1], 15);
+        assertEq(arr[2], 10);
+        assertEq(arr[3], 10);
     }
 
     function test_getTierPricesMonthly_returnsAllThree() public view {
-        uint256[3] memory arr = core.getTierPricesMonthly();
-        assertEq(arr[0], 9_000_000);
-        assertEq(arr[1], 49_000_000);
-        assertEq(arr[2], 200_000_000);
+        uint256[3] memory arr = subs.getTierPricesMonthly();
+        assertEq(arr[0], 4_990_000);
+        assertEq(arr[1], 14_990_000);
+        assertEq(arr[2], 49_990_000);
     }
 
     function test_getTierPricesAnnual_returnsAllThree() public view {
-        uint256[3] memory arr = core.getTierPricesAnnual();
-        assertEq(arr[0], 86_400_000);
-        assertEq(arr[1], 470_400_000);
-        assertEq(arr[2], 1_920_000_000);
+        uint256[3] memory arr = subs.getTierPricesAnnual();
+        assertEq(arr[0], 49_000_000);
+        assertEq(arr[1], 149_000_000);
+        assertEq(arr[2], 499_000_000);
     }
 
     function test_getTierMaxCollateralUsd_returnsAllFour() public view {
-        uint256[4] memory arr = core.getTierMaxCollateralUsd();
+        uint256[4] memory arr = subs.getTierMaxCollateralUsd();
         assertEq(arr[0], 15_000e8);
         assertEq(arr[1], 100_000e8);
         assertEq(arr[2], 300_000e8);

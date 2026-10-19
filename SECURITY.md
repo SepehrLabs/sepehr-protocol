@@ -30,9 +30,9 @@ We commit to:
 ## Scope
 
 In scope:
-- Smart contracts under `src/` (SepehrCore, SepehrTimelock, the 
-  three V1-registered adapters, libraries, interfaces, DEX 
-  routers, flash loan providers)
+- Smart contracts under `src/` (SepehrCore, SepehrSubscriptions, 
+  SepehrTimelock, the three V1-registered adapters, libraries, 
+  interfaces, DEX routers, flash loan providers, oracles)
 - Deployment scripts under `script/` insofar as they affect on-chain 
   state of the V1 deployment
 
@@ -57,7 +57,7 @@ acknowledged in a public security hall of fame.
 ## Audit History
 
 - Internal review: completed
-- External audit: pending Arbitrum Audit Program candidacy 
+- External audit: a public audit contest before mainnet, in preparation 
   (timeline TBD)
 - Public audit reports will be published in `docs/audits/` once 
   available.

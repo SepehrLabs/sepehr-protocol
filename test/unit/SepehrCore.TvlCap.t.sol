@@ -6,9 +6,12 @@ import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import {SepehrCore} from "../../src/SepehrCore.sol";
+import {SepehrSubscriptions} from "../../src/SepehrSubscriptions.sol";
+import {ISepehrSubscriptions} from "../../src/interfaces/ISepehrSubscriptions.sol";
 import {SepehrErrors} from "../../src/libraries/SepehrErrors.sol";
 import {SepehrEvents} from "../../src/libraries/SepehrEvents.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
+import {SepehrStack} from "../helpers/SepehrStack.sol";
 
 contract MockERC20 is ERC20 {
     constructor(
@@ -33,8 +36,9 @@ contract MockERC20 is ERC20 {
 /// the running total never disables already-enabled positions; the running total is
 /// decremented by the snapshot taken at enable time, so price drift between enable
 /// and disable cannot underflow the running total.
-contract SepehrCoreTvlCapTest is Test {
+contract SepehrCoreTvlCapTest is SepehrStack {
     SepehrCore public core;
+    SepehrSubscriptions public subs;
     MockAdapter public adapter;
     MockERC20 public usdc;
 
@@ -47,7 +51,7 @@ contract SepehrCoreTvlCapTest is Test {
     bytes32 public constant PROTOCOL_KEY_MORPHO = keccak256("MORPHO_BLUE");
     uint256 public constant THRESHOLD_HF = 1.3e18;
     uint256 public constant SLIPPAGE_BPS = 250;
-    uint256 public constant REPAY_BPS = 2500;
+    uint256 public constant TARGET_HF = 1.5e18;
 
     /// @dev V1 launch cap is $75k expressed in USD-8; chosen to mirror the deploy
     /// script default so the unit tests assert the same boundary the production
@@ -60,7 +64,7 @@ contract SepehrCoreTvlCapTest is Test {
         adapter = new MockAdapter();
         usdc = new MockERC20("USD Coin", "USDC");
 
-        core = new SepehrCore(address(this), timelock, guardian, address(usdc), 0, TVL_CAP_75K_USD8, block.chainid);
+        (core, subs) = _deployStack(address(this), timelock, guardian, address(usdc), 0, TVL_CAP_75K_USD8);
 
         vm.prank(timelock);
         core.addAdapter(PROTOCOL_KEY_AAVE, address(adapter));
@@ -70,15 +74,15 @@ contract SepehrCoreTvlCapTest is Test {
         usdc.mint(alice, 1000e6);
         usdc.mint(bob, 1000e6);
         vm.prank(alice);
-        usdc.approve(address(core), type(uint256).max);
+        usdc.approve(address(subs), type(uint256).max);
         vm.prank(bob);
-        usdc.approve(address(core), type(uint256).max);
+        usdc.approve(address(subs), type(uint256).max);
 
         // Watchtower ($300k tier cap) so the protocol-wide cap, not the tier cap, is what binds.
         vm.prank(alice);
-        core.subscribe(3, false);
+        subs.subscribe(3, false);
         vm.prank(bob);
-        core.subscribe(3, false);
+        subs.subscribe(3, false);
 
         adapter.setDelegation(alice, true);
         adapter.setDelegation(bob, true);
@@ -111,7 +115,7 @@ contract SepehrCoreTvlCapTest is Test {
     function test_setTvlCapUsd_belowRunningTotal_doesNotDisableExistingPositions() public {
         adapter.setCollateralValueUsd(alice, 50_000e8);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
         assertEq(core.protectedCollateralUsd(), 50_000e8);
 
         vm.prank(timelock);
@@ -128,7 +132,7 @@ contract SepehrCoreTvlCapTest is Test {
         adapter.setCollateralValueUsd(alice, 30_000e8);
 
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
 
         assertEq(core.protectedCollateralUsd(), 30_000e8);
         assertEq(core.protectionCollateralSnapshot(alice, PROTOCOL_KEY_AAVE), 30_000e8);
@@ -137,7 +141,7 @@ contract SepehrCoreTvlCapTest is Test {
     function test_enableProtection_atExactlyCap_isAllowed() public {
         adapter.setCollateralValueUsd(alice, TVL_CAP_75K_USD8);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
         assertEq(core.protectedCollateralUsd(), TVL_CAP_75K_USD8);
     }
 
@@ -148,7 +152,7 @@ contract SepehrCoreTvlCapTest is Test {
             abi.encodeWithSelector(SepehrErrors.TvlCapExceeded.selector, TVL_CAP_75K_USD8 + 1, TVL_CAP_75K_USD8)
         );
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
     }
 
     /// @dev Two enable calls that individually fit the cap but together exceed it: the
@@ -157,12 +161,12 @@ contract SepehrCoreTvlCapTest is Test {
     function test_enableProtection_secondPositionExceedsCap_reverts() public {
         adapter.setCollateralValueUsd(alice, 60_000e8);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
 
         adapter.setCollateralValueUsd(bob, 20_000e8);
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.TvlCapExceeded.selector, 80_000e8, TVL_CAP_75K_USD8));
         vm.prank(bob);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
 
         assertEq(core.protectedCollateralUsd(), 60_000e8);
     }
@@ -173,11 +177,11 @@ contract SepehrCoreTvlCapTest is Test {
 
         // Only Titan's tier cap is unlimited.
         address titan = makeAddr("titan");
-        core.grantTitanSubscription(titan, 30 days);
+        subs.grantTitanSubscription(titan, 30 days);
         adapter.setDelegation(titan, true);
         adapter.setCollateralValueUsd(titan, 1_000_000_000e8); // absurd value
         vm.prank(titan);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
         assertEq(core.protectedCollateralUsd(), 1_000_000_000e8);
     }
 
@@ -192,7 +196,7 @@ contract SepehrCoreTvlCapTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.BelowMinimumCollateral.selector, 500e8, 1000e8));
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
 
         assertEq(core.protectedCollateralUsd(), 0);
         assertEq(core.protectionCollateralSnapshot(alice, PROTOCOL_KEY_AAVE), 0);
@@ -203,7 +207,7 @@ contract SepehrCoreTvlCapTest is Test {
     function test_disableProtection_decrementsByOriginalSnapshot() public {
         adapter.setCollateralValueUsd(alice, 30_000e8);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
 
         // Live collateral value rallies after enable; the snapshot must be unaffected.
         adapter.setCollateralValueUsd(alice, 90_000e8);
@@ -222,11 +226,11 @@ contract SepehrCoreTvlCapTest is Test {
     function test_disableProtection_neverUnderflows_evenIfPriceMovedAfterEnable() public {
         adapter.setCollateralValueUsd(alice, 30_000e8);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
 
         adapter.setCollateralValueUsd(bob, 20_000e8);
         vm.prank(bob);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
 
         // Total = 50_000e8. Now alice's live value rallies; her snapshot is still 30k.
         adapter.setCollateralValueUsd(alice, 200_000e8);
@@ -243,15 +247,15 @@ contract SepehrCoreTvlCapTest is Test {
     function test_unsubscribe_decrementsRunningTotalAcrossAllProtections() public {
         adapter.setCollateralValueUsd(alice, 25_000e8);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_MORPHO, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_MORPHO, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
         // Two positions × 25k each (the snapshot is taken from the live value at each
         // enable call; we did not change it between calls).
         assertEq(core.protectedCollateralUsd(), 50_000e8);
 
         vm.prank(alice);
-        core.unsubscribe();
+        subs.unsubscribe();
 
         assertEq(core.protectedCollateralUsd(), 0);
         assertEq(core.protectionCollateralSnapshot(alice, PROTOCOL_KEY_AAVE), 0);
@@ -263,9 +267,9 @@ contract SepehrCoreTvlCapTest is Test {
     function test_unsubscribe_doesNotDoubleDecrement_afterPartialDisable() public {
         adapter.setCollateralValueUsd(alice, 25_000e8);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_MORPHO, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_MORPHO, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
         assertEq(core.protectedCollateralUsd(), 50_000e8);
 
         vm.prank(alice);
@@ -273,7 +277,7 @@ contract SepehrCoreTvlCapTest is Test {
         assertEq(core.protectedCollateralUsd(), 25_000e8);
 
         vm.prank(alice);
-        core.unsubscribe();
+        subs.unsubscribe();
         assertEq(core.protectedCollateralUsd(), 0);
     }
 
@@ -282,13 +286,13 @@ contract SepehrCoreTvlCapTest is Test {
     function test_reEnableProtection_afterDisable_usesCurrentLiveCollateralValue() public {
         adapter.setCollateralValueUsd(alice, 30_000e8);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
         vm.prank(alice);
         core.disableProtection(PROTOCOL_KEY_AAVE);
 
         adapter.setCollateralValueUsd(alice, 40_000e8);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
 
         assertEq(core.protectedCollateralUsd(), 40_000e8);
         assertEq(core.protectionCollateralSnapshot(alice, PROTOCOL_KEY_AAVE), 40_000e8);
@@ -302,15 +306,15 @@ contract SepehrCoreTvlCapTest is Test {
         address shield = makeAddr("shield");
         usdc.mint(shield, 100e6);
         vm.startPrank(shield);
-        usdc.approve(address(core), type(uint256).max);
-        core.subscribe(1, false);
+        usdc.approve(address(subs), type(uint256).max);
+        subs.subscribe(1, false);
         vm.stopPrank();
         adapter.setDelegation(shield, true);
         adapter.setCollateralValueUsd(shield, 15_000e8 + 1);
 
         vm.expectRevert(abi.encodeWithSelector(SepehrErrors.TierCollateralCapExceeded.selector, 15_000e8 + 1, 15_000e8));
         vm.prank(shield);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
     }
 
     /// @dev M-2 (audit PoC): collateral borrowed for the enable call and withdrawn right after
@@ -318,7 +322,7 @@ contract SepehrCoreTvlCapTest is Test {
     function test_refreshCollateralSnapshot_freesCollateralWithdrawnAfterEnable() public {
         adapter.setCollateralValueUsd(alice, TVL_CAP_75K_USD8);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
         adapter.setCollateralValueUsd(alice, 0);
 
         vm.expectEmit(true, true, false, true, address(core));
@@ -331,13 +335,13 @@ contract SepehrCoreTvlCapTest is Test {
 
         adapter.setCollateralValueUsd(bob, 50_000e8);
         vm.prank(bob);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
     }
 
     function test_refreshCollateralSnapshot_followsAGrowingPosition() public {
         adapter.setCollateralValueUsd(alice, 10_000e8);
         vm.prank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
         adapter.setCollateralValueUsd(alice, 25_000e8);
 
         core.refreshCollateralSnapshot(alice, PROTOCOL_KEY_AAVE);
@@ -354,8 +358,8 @@ contract SepehrCoreTvlCapTest is Test {
     function test_releaseExpiredProtections_returnsTheirShareOfTheCap() public {
         adapter.setCollateralValueUsd(alice, 30_000e8);
         vm.startPrank(alice);
-        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
-        core.enableProtection(PROTOCOL_KEY_MORPHO, THRESHOLD_HF, SLIPPAGE_BPS, REPAY_BPS);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
+        core.enableProtection(PROTOCOL_KEY_MORPHO, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
         vm.stopPrank();
         vm.warp(block.timestamp + 31 days);
 

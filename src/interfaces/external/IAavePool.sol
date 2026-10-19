@@ -40,6 +40,15 @@ interface IAavePool {
         address to
     ) external returns (uint256);
 
+    /// @notice Every reserve asset, indexed by reserve id.
+    function getReservesList() external view returns (address[] memory);
+
+    /// @notice The user's configuration bitmap: bit `2 * id` borrowing, bit `2 * id + 1`
+    ///         using as collateral, for reserve `id`.
+    function getUserConfiguration(
+        address user
+    ) external view returns (uint256);
+
     function getReserveData(
         address asset
     )

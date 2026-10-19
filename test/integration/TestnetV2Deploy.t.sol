@@ -10,6 +10,7 @@ import {SepehrCore} from "../../src/SepehrCore.sol";
 import {IProtocolAdapter} from "../../src/interfaces/IProtocolAdapter.sol";
 import {MockAdapter} from "../../src/mocks/MockAdapter.sol";
 import {MockChainlinkAggregator} from "../helpers/MockChainlinkAggregator.sol";
+import {SepehrStack} from "../helpers/SepehrStack.sol";
 
 contract MockERC20 is ERC20 {
     constructor(
@@ -38,7 +39,7 @@ contract MockERC20 is ERC20 {
 ///              registries (adapter, keeper, flash, asset oracle, DEX router),
 ///           5. an op moves Waiting → Ready → Done, the states the
 ///              execute script checks before broadcasting.
-contract TestnetV2DeployTest is Test {
+contract TestnetV2DeployTest is SepehrStack {
     uint256 internal constant TESTNET_TIMELOCK_DELAY = 300; // 5 min
     bytes32 internal constant AAVE_KEY = keccak256("aave-v3-arbitrum-sepolia");
 
@@ -66,9 +67,7 @@ contract TestnetV2DeployTest is Test {
         timelock = new TimelockController(TESTNET_TIMELOCK_DELAY, proposers, executors, address(0));
 
         usdc = new MockERC20("USD Coin", "USDC");
-        core = new SepehrCore(
-            deployer, address(timelock), pauseGuardian, address(usdc), 0, type(uint256).max, block.chainid
-        );
+        (core,) = _deployStack(deployer, address(timelock), pauseGuardian, address(usdc), 0, type(uint256).max);
         adapter = new MockAdapter();
         usdcOracle = new MockChainlinkAggregator(8, int256(100_000_000)); // $1
     }

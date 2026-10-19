@@ -6,6 +6,9 @@ import {Script, console} from "forge-std/Script.sol";
 import {SepehrCore} from "../src/SepehrCore.sol";
 import {AaveV3Adapter} from "../src/adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../src/adapters/CompoundV3Adapter.sol";
+import {MorphoBlueAdapter} from "../src/adapters/MorphoBlueAdapter.sol";
+import {AggregatorRouter} from "../src/dex/AggregatorRouter.sol";
+import {AggregatorSelectors} from "../src/dex/AggregatorSelectors.sol";
 import {CamelotRouter} from "../src/dex/CamelotRouter.sol";
 import {TraderJoeV22Router} from "../src/dex/TraderJoeV22Router.sol";
 import {UniV2ForkRouter} from "../src/dex/UniV2ForkRouter.sol";
@@ -13,7 +16,9 @@ import {UniswapV3Router} from "../src/dex/UniswapV3Router.sol";
 import {VelodromeRouter} from "../src/dex/VelodromeRouter.sol";
 import {AaveFlashLoanProvider} from "../src/flash/AaveFlashLoanProvider.sol";
 import {BalancerFlashLoanProvider} from "../src/flash/BalancerFlashLoanProvider.sol";
+import {MorphoBlueFlashLoanProvider} from "../src/flash/MorphoBlueFlashLoanProvider.sol";
 import {UniswapV3FlashLoanProvider} from "../src/flash/UniswapV3FlashLoanProvider.sol";
+import {ChainlinkProductFeed} from "../src/oracles/ChainlinkProductFeed.sol";
 
 contract DeployPeripherals is Script {
     /// @notice Arbitrum One.
@@ -41,6 +46,7 @@ contract DeployPeripherals is Script {
         _deployFlashProviders();
         _deployDexRouters();
         _deployAdapters();
+        _deployOracles();
 
         vm.stopBroadcast();
 
@@ -62,6 +68,13 @@ contract DeployPeripherals is Script {
         if (balancerVault != address(0)) {
             BalancerFlashLoanProvider balancerFlash = new BalancerFlashLoanProvider(balancerVault, owner);
             console.log("BalancerFlashLoanProvider:", address(balancerFlash));
+        }
+
+        // Morpho Blue lends for free; on Arbitrum One it holds the deepest idle USDC.
+        address morpho = vm.envOr("MORPHO_BLUE", address(0));
+        if (morpho != address(0)) {
+            MorphoBlueFlashLoanProvider morphoFlash = new MorphoBlueFlashLoanProvider(morpho, owner);
+            console.log("MorphoBlueFlashLoanProvider:", address(morphoFlash));
         }
 
         address uniV3Pool = vm.envOr("UNIV3_FLASH_POOL", address(0));
@@ -101,6 +114,20 @@ contract DeployPeripherals is Script {
             console.log("CamelotRouter:", address(cRouter));
         }
 
+        // Lot 7: one AggregatorRouter per aggregator, its target and functions fixed here. On
+        // Arbitrum One: KyberSwap MetaAggregationRouterV2 0x6131B5fae19EA4f9D964eAc0408E4408b66337b5,
+        // Velora AugustusV6.2 0x6A000F20005980200259B80c5102003040001068 (each pulls its own input).
+        address kyberSwap = vm.envOr("KYBERSWAP_ROUTER", address(0));
+        if (kyberSwap != address(0)) {
+            AggregatorRouter kRouter = new AggregatorRouter(kyberSwap, kyberSwap, AggregatorSelectors.kyberSwap());
+            console.log("AggregatorRouter (KyberSwap):", address(kRouter));
+        }
+        address velora = vm.envOr("VELORA_AUGUSTUS", address(0));
+        if (velora != address(0)) {
+            AggregatorRouter vRouter = new AggregatorRouter(velora, velora, AggregatorSelectors.velora());
+            console.log("AggregatorRouter (Velora):", address(vRouter));
+        }
+
         address tjRouter = vm.envOr("TRADERJOE_ROUTER", address(0));
         address tjFactory = vm.envOr("TRADERJOE_FACTORY", address(0));
         if (tjRouter != address(0) && tjFactory != address(0)) {
@@ -114,9 +141,8 @@ contract DeployPeripherals is Script {
         address coreAddr = vm.envAddress("SEPEHR_CORE");
 
         address aavePool = vm.envOr("AAVE_POOL", address(0));
-        address aToken = vm.envOr("AAVE_ATOKEN", address(0));
-        if (aavePool != address(0) && aToken != address(0)) {
-            AaveV3Adapter aaveAdapter = new AaveV3Adapter(aavePool, aToken, coreAddr);
+        if (aavePool != address(0)) {
+            AaveV3Adapter aaveAdapter = new AaveV3Adapter(aavePool, coreAddr);
             console.log("AaveV3Adapter:", address(aaveAdapter));
         }
 
@@ -124,6 +150,29 @@ contract DeployPeripherals is Script {
         if (comet != address(0)) {
             CompoundV3Adapter compAdapter = new CompoundV3Adapter(comet, coreAddr);
             console.log("CompoundV3Adapter:", address(compAdapter));
+        }
+
+        // One adapter, hence one protocol key, per Morpho Blue market (V1: WBTC, wstETH and WETH
+        // against USDC on Arbitrum One).
+        address morpho = vm.envOr("MORPHO_BLUE", address(0));
+        bytes32[] memory marketIds = vm.envOr("MORPHO_MARKET_IDS", ",", new bytes32[](0));
+        if (morpho != address(0) && marketIds.length > 0) {
+            address loanUsdFeed = vm.envAddress("MORPHO_LOAN_USD_FEED");
+            for (uint256 i = 0; i < marketIds.length; i++) {
+                MorphoBlueAdapter morphoAdapter = new MorphoBlueAdapter(morpho, marketIds[i], loanUsdFeed, coreAddr);
+                console.log("MorphoBlueAdapter:", vm.toString(marketIds[i]), address(morphoAdapter));
+            }
+        }
+    }
+
+    /// @dev Feeds SepehrCore reads but Chainlink does not publish in one leg: wstETH/USD from
+    ///      the WSTETH/ETH market feed and ETH/USD (register with `setAssetOracle` via the timelock).
+    function _deployOracles() internal {
+        address wstEthEth = vm.envOr("WSTETH_ETH_FEED", address(0));
+        address ethUsd = vm.envOr("ETH_USD_FEED", address(0));
+        if (wstEthEth != address(0) && ethUsd != address(0)) {
+            ChainlinkProductFeed wstEthUsd = new ChainlinkProductFeed(wstEthEth, ethUsd, 8, "wstETH / USD");
+            console.log("ChainlinkProductFeed wstETH/USD:", address(wstEthUsd));
         }
     }
 }

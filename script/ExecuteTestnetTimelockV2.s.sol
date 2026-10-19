@@ -10,9 +10,9 @@ import {IProtocolAdapter} from "../src/interfaces/IProtocolAdapter.sol";
 /// @title ExecuteTestnetTimelockV2
 /// @notice Part 2 of the Bloc 5.1 split deploy. Reads the addresses
 ///         persisted by `DeployTestnetArbitrumSepoliaV2.s.sol` and
-///         executes the five admin ops it scheduled (addAdapter,
-///         addKeeper, addFlashLoanProvider, setAssetOracle,
-///         addDexRouter). The timelock enforces the 300-second delay,
+///         executes the admin ops it scheduled: addAdapter, addKeeper,
+///         addFlashLoanProvider, setAssetOracle and addDexRouter on the
+///         core. The timelock enforces the 300-second delay,
 ///         counted from the block that mined the schedule: the script
 ///         asks the timelock whether each op is ready before
 ///         broadcasting anything.
