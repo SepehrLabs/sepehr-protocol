@@ -19,7 +19,7 @@ library SepehrEvents {
     /// @notice A18: emitted when `unsubscribe` iterates and wipes the user's `_protections`
     /// entries. `count` is the number of protocol keys cleared in this call.
     event UserProtectionsCleared(address indexed user, uint256 count);
-    /// @notice M-2: a position's TVL snapshot re-read at its current collateral value.
+    /// @notice M-2: a position's TVL snapshot lowered to its current collateral value.
     event CollateralSnapshotRefreshed(
         address indexed user, bytes32 indexed protocolKey, uint256 oldValueUsd, uint256 newValueUsd
     );
