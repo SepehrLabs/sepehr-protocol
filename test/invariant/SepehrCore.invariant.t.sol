@@ -167,4 +167,13 @@ contract SepehrCoreInvariantTest is SepehrStack {
         }
         assertEq(core.protectedCollateralUsd(), sum);
     }
+
+    /// @dev KupiaSec (2026-10-20): a refresh only lowers a snapshot, so no position counts more
+    /// against the TVL cap than it did when it was enabled.
+    function invariant_snapshotNeverExceedsItsValueAtEnable() public view {
+        for (uint256 i = 0; i < handler.actorCount(); i++) {
+            address actor = handler.actors(i);
+            assertLe(core.protectionCollateralSnapshot(actor, PROTOCOL_KEY), handler.snapshotAtEnable(actor));
+        }
+    }
 }

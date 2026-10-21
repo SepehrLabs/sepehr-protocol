@@ -54,6 +54,9 @@ contract SepehrCoreHandler is Test {
     uint256 public executeCalls;
     uint256 public executeReverts;
     uint256 public refreshCalls;
+    /// @dev Ghost: each position's snapshot when it was last enabled, which a refresh may
+    /// only lower (KupiaSec, 2026-10-20).
+    mapping(address => uint256) public snapshotAtEnable;
     uint256 public releaseCalls;
 
     constructor(
@@ -181,6 +184,29 @@ contract SepehrCoreHandler is Test {
         vm.prank(actor);
         try core.enableProtection(PROTOCOL_KEY, thresholdHF, slippageBps, targetHF) {
             enableProtectionCalls++;
+            snapshotAtEnable[actor] = core.protectionCollateralSnapshot(actor, PROTOCOL_KEY);
+        } catch {}
+    }
+
+    /// @dev The fuzzed `enableProtection` above mostly sends parameters the core refuses, so it
+    /// almost never enables a position: this one enables with a valid rule and collateral within
+    /// the plan's cap, so the TVL invariants see real snapshots.
+    function enableValidProtection(
+        uint256 actorSeed,
+        uint256 collateralUsd
+    ) external {
+        address actor = _getActor(actorSeed);
+        ISepehrSubscriptions.Subscription memory sub = subs.getSubscription(actor);
+        if (sub.tier == 0 || sub.expiresAt <= block.timestamp) return;
+        if (core.getProtection(actor, PROTOCOL_KEY).enabled) return;
+
+        adapter.setCollateralValueUsd(actor, bound(collateralUsd, 500e8, 15_000e8));
+        adapter.setDelegation(actor, true);
+
+        vm.prank(actor);
+        try core.enableProtection(PROTOCOL_KEY, 1.2e18, 100, 1.35e18) {
+            enableProtectionCalls++;
+            snapshotAtEnable[actor] = core.protectionCollateralSnapshot(actor, PROTOCOL_KEY);
         } catch {}
     }
 
@@ -218,6 +244,24 @@ contract SepehrCoreHandler is Test {
         try core.refreshCollateralSnapshot(actor, PROTOCOL_KEY) {
             refreshCalls++;
         } catch {}
+    }
+
+    /// @dev KupiaSec (2026-10-20): a deposit borrowed for one transaction around a refresh of
+    /// the subscriber's own snapshot, then withdrawn.
+    function inflateAndRefresh(
+        uint256 actorSeed,
+        uint256 extraUsd
+    ) external {
+        address actor = _getActor(actorSeed);
+        if (!core.getProtection(actor, PROTOCOL_KEY).enabled) return;
+
+        uint256 value = adapter.getCollateralValueUsd(actor);
+        adapter.setCollateralValueUsd(actor, value + bound(extraUsd, 1, 10_000_000e8));
+        vm.prank(actor);
+        try core.refreshCollateralSnapshot(actor, PROTOCOL_KEY) {
+            refreshCalls++;
+        } catch {}
+        adapter.setCollateralValueUsd(actor, value);
     }
 
     /// @dev M-2: anyone releases an expired subscription's protections.

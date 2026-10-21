@@ -15,9 +15,10 @@ import {MockChainlinkAggregator} from "../test/helpers/MockChainlinkAggregator.s
 /// @notice Bloc 5.1 testnet dry-run on Arbitrum Sepolia (chainId
 ///         421614) with a **5-minute timelock delay**. Splits the old
 ///         schedule+execute flow in two: this script only *schedules*
-///         the five admin ops on the core; `ExecuteTestnetTimelockV2.s.sol`
-///         runs after the delay elapses. The testnet charges the mainnet
-///         plan prices.
+///         the admin ops (five on the core, six half-price cuts on
+///         SepehrSubscriptions: the testnet charges half the launch
+///         prices); `ExecuteTestnetTimelockV2.s.sol` runs after the delay
+///         elapses.
 ///
 ///         Uses OZ `TimelockController` directly with `minDelay = 300`
 ///         because `SepehrTimelock.MIN_DELAY = 48 hours` is hardcoded
@@ -124,6 +125,29 @@ contract DeployTestnetArbitrumSepoliaV2 is Script {
         timelock.schedule(address(core), 0, dataSetOracle, bytes32(0), bytes32(0), TESTNET_TIMELOCK_DELAY);
         timelock.schedule(address(core), 0, dataAddRouter, bytes32(0), bytes32(0), TESTNET_TIMELOCK_DELAY);
 
+        // The testnet charges half price, rounded up to the cent (Shield 2.50 USDC a month):
+        // one cut per tier and period, the most `setTierPrice` allows, on SepehrSubscriptions.
+        uint256[3] memory monthly = subscriptions.getTierPricesMonthly();
+        uint256[3] memory annual = subscriptions.getTierPricesAnnual();
+        for (uint8 tier = 1; tier <= 3; tier++) {
+            timelock.schedule(
+                address(subscriptions),
+                0,
+                halfPrice(tier, false, monthly[tier - 1]),
+                bytes32(0),
+                bytes32(0),
+                TESTNET_TIMELOCK_DELAY
+            );
+            timelock.schedule(
+                address(subscriptions),
+                0,
+                halfPrice(tier, true, annual[tier - 1]),
+                bytes32(0),
+                bytes32(0),
+                TESTNET_TIMELOCK_DELAY
+            );
+        }
+
         vm.stopBroadcast();
 
         // ─── Persist JSON for ExecuteTimelockV2 ──────────────────
@@ -144,5 +168,21 @@ contract DeployTestnetArbitrumSepoliaV2 is Script {
         vm.writeJson(finalJson, "deployments/arbitrum-sepolia-v2.json");
 
         console.log("TESTNET_V2_SCHEDULE_COMPLETE");
+    }
+
+    /// @notice `setTierPrice` at `halved(price)`, as `ExecuteTestnetTimelockV2` rebuilds it.
+    function halfPrice(
+        uint8 tier,
+        bool annual,
+        uint256 price
+    ) public pure returns (bytes memory) {
+        return abi.encodeWithSignature("setTierPrice(uint8,bool,uint256)", tier, annual, halved(price));
+    }
+
+    /// @notice Half of `price` (USDC, 6 decimals) rounded up to the cent: 4.99 becomes 2.50.
+    function halved(
+        uint256 price
+    ) public pure returns (uint256) {
+        return (price / 2 + 9999) / 10_000 * 10_000;
     }
 }

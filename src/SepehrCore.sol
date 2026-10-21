@@ -411,10 +411,14 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
         _clearProtections(user);
     }
 
-    /// @notice M-2: re-read a protected position's collateral value and move the TVL running
-    /// total by the difference.
+    /// @notice M-2: lower a protected position's TVL snapshot to its current collateral value,
+    /// returning the difference to the TVL running total.
     /// @dev Callable by anyone. The snapshot taken at `enableProtection` never moved, so
     /// collateral borrowed for the enable call and withdrawn right after kept the cap filled.
+    /// A refresh never raises a snapshot: it would let anyone push the running total past
+    /// `tvlCapUsd` and the plan's cap with a deposit borrowed for one transaction, and block
+    /// every new protection (KupiaSec, 2026-10-20). A position that grew keeps the value it was
+    /// enabled with; nothing happens when the live value is not lower.
     /// @param user Owner of the position.
     /// @param protocolKey Protocol of the position.
     function refreshCollateralSnapshot(
@@ -427,7 +431,8 @@ contract SepehrCore is ISepehrCore, ISepehrCallback, Ownable2Step, ReentrancyGua
 
         uint256 oldValue = protectionCollateralSnapshot[user][protocolKey];
         uint256 newValue = adapter.getCollateralValueUsd(user);
-        protectedCollateralUsd = protectedCollateralUsd - oldValue + newValue;
+        if (newValue >= oldValue) return;
+        protectedCollateralUsd -= oldValue - newValue;
         protectionCollateralSnapshot[user][protocolKey] = newValue;
         emit SepehrEvents.CollateralSnapshotRefreshed(user, protocolKey, oldValue, newValue);
     }

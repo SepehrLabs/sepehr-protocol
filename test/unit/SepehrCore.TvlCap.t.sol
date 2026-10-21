@@ -338,15 +338,39 @@ contract SepehrCoreTvlCapTest is SepehrStack {
         core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
     }
 
-    function test_refreshCollateralSnapshot_followsAGrowingPosition() public {
+    function test_refreshCollateralSnapshot_neverRaisesTheSnapshotOfAGrowingPosition() public {
         adapter.setCollateralValueUsd(alice, 10_000e8);
         vm.prank(alice);
         core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
         adapter.setCollateralValueUsd(alice, 25_000e8);
 
+        vm.recordLogs();
         core.refreshCollateralSnapshot(alice, PROTOCOL_KEY_AAVE);
 
-        assertEq(core.protectedCollateralUsd(), 25_000e8);
+        assertEq(vm.getRecordedLogs().length, 0, "nothing to release, nothing emitted");
+        assertEq(core.protectedCollateralUsd(), 10_000e8);
+        assertEq(core.protectionCollateralSnapshot(alice, PROTOCOL_KEY_AAVE), 10_000e8);
+    }
+
+    /// @dev KupiaSec (2026-10-20): a deposit borrowed for one transaction, a refresh of the
+    /// subscriber's own position and a withdrawal used to leave the running total past the cap,
+    /// and every new protection reverted with `TvlCapExceeded`.
+    function test_refreshCollateralSnapshot_cannotPushTheTotalPastTheCap() public {
+        adapter.setCollateralValueUsd(alice, 1000e8);
+        vm.prank(alice);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
+
+        adapter.setCollateralValueUsd(alice, 10_000_000e8);
+        vm.prank(alice);
+        core.refreshCollateralSnapshot(alice, PROTOCOL_KEY_AAVE);
+        adapter.setCollateralValueUsd(alice, 1000e8);
+
+        assertEq(core.protectedCollateralUsd(), 1000e8);
+
+        adapter.setCollateralValueUsd(bob, 50_000e8);
+        vm.prank(bob);
+        core.enableProtection(PROTOCOL_KEY_AAVE, THRESHOLD_HF, SLIPPAGE_BPS, TARGET_HF);
+        assertEq(core.protectedCollateralUsd(), 51_000e8);
     }
 
     function test_refreshCollateralSnapshot_revertsWithoutProtection() public {
